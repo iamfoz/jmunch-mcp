@@ -149,7 +149,10 @@ def clear_all(path: Path | None = None) -> int:
         con.close()
 
 
-_EXCLUDE_LOCAL_VERBS = "tool NOT LIKE 'jmunch.%'"
+# Rows with zero saved_bytes (jmunch.* handle ops, passthroughs below threshold,
+# pure errors) are always hidden from the dashboard — they're noise for a
+# savings-oriented view.
+_ONLY_WITH_SAVINGS = "saved_bytes > 0"
 
 
 def totals(path: Path | None = None) -> dict:
@@ -165,7 +168,7 @@ def totals(path: Path | None = None) -> dict:
             "       COALESCE(SUM(saved_bytes), 0) AS saved, "
             "       COALESCE(SUM(handle_created), 0) AS handles, "
             "       COALESCE(SUM(is_error), 0) AS errors "
-            f"FROM calls WHERE {_EXCLUDE_LOCAL_VERBS}"
+            f"FROM calls WHERE {_ONLY_WITH_SAVINGS}"
         ).fetchone()
     return {
         "calls": row["n"],
@@ -194,7 +197,7 @@ def per_upstream(path: Path | None = None) -> list[dict]:
             "       COALESCE(SUM(response_bytes), 0) AS sent, "
             "       COALESCE(SUM(saved_bytes), 0) AS saved, "
             "       COALESCE(SUM(duration_ms), 0) AS ms "
-            f"FROM calls WHERE {_EXCLUDE_LOCAL_VERBS} "
+            f"FROM calls WHERE {_ONLY_WITH_SAVINGS} "
             "GROUP BY upstream ORDER BY saved DESC"
         ).fetchall()
     return [
@@ -219,7 +222,7 @@ def recent_calls(limit: int = 50, path: Path | None = None) -> list[dict]:
         rows = con.execute(
             "SELECT ts, upstream, tool, raw_bytes, response_bytes, saved_bytes, "
             "       duration_ms, handle_created, is_error "
-            f"FROM calls WHERE {_EXCLUDE_LOCAL_VERBS} "
+            f"FROM calls WHERE {_ONLY_WITH_SAVINGS} "
             "ORDER BY id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
@@ -238,7 +241,7 @@ def series(bucket_seconds: int = 300, hours: int = 24, path: Path | None = None)
             "       COUNT(*) AS n, "
             "       COALESCE(SUM(saved_bytes), 0) AS saved, "
             "       COALESCE(SUM(raw_bytes), 0) AS raw "
-            f"FROM calls WHERE ts >= ? AND {_EXCLUDE_LOCAL_VERBS} "
+            f"FROM calls WHERE ts >= ? AND {_ONLY_WITH_SAVINGS} "
             "GROUP BY bucket ORDER BY bucket ASC",
             (bucket_seconds, bucket_seconds, cutoff),
         ).fetchall()

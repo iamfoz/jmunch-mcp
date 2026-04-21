@@ -24,7 +24,7 @@ def test_metrics_record_and_totals(tmp_path):
     m.close()
 
     t = metrics.totals(db)
-    # jmunch.* local verbs are excluded from aggregates (noise, not upstream work).
+    # Dashboard rule: rows with saved_bytes=0 (jmunch.peek here) are hidden everywhere.
     assert t["calls"] == 2
     assert t["saved_bytes"] == 23300
     assert t["tokens_saved"] == 23300 // 4
@@ -80,6 +80,28 @@ def test_metrics_series_buckets(tmp_path):
     assert s[0]["calls"] == 2
     assert s[0]["saved_bytes"] == 100
     assert s[0]["tokens_saved"] == 25
+
+
+def test_zero_saved_rows_hidden_everywhere(tmp_path):
+    """Dashboard rule: rows with saved_bytes=0 never surface. Covers jmunch.*
+    handle ops, below-threshold passthroughs, and pure errors."""
+    db = tmp_path / "m.db"
+    m = metrics.MetricsDB(db)
+    m.record(upstream="github", tool="search_issues",
+             raw_bytes=4000, response_bytes=400, saved_bytes=3600)
+    m.record(upstream="github", tool="jmunch.slice", response_bytes=250)  # saved=0
+    m.record(upstream="passthru", tool="ping", raw_bytes=50, response_bytes=50)  # saved=0
+    m.close()
+
+    tools = [r["tool"] for r in metrics.recent_calls(path=db)]
+    assert tools == ["search_issues"]
+
+    ups = [r["upstream"] for r in metrics.per_upstream(db)]
+    assert ups == ["github"]
+
+    t = metrics.totals(db)
+    assert t["calls"] == 1
+    assert t["saved_bytes"] == 3600
 
 
 def test_totals_missing_db_returns_empty(tmp_path):
