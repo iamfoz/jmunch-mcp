@@ -20,10 +20,23 @@ Wall-clock time was also faster with the proxy on both suites, despite the extra
 
 Tabular content (GitHub) routes to the SQLite backend and answers `peek`/`slice`/`aggregate`; JSON content (Firecrawl scrape/map) routes to the JSON-tree backend and answers `peek`/`slice` (JSONPath)/`search`. See [bench/README.md](bench/README.md) to reproduce.
 
+## Install
+
+```bash
+pip install jmunch-mcp
+```
+
+From source:
+
+```bash
+git clone https://github.com/jgravelle/jmunch-mcp
+cd jmunch-mcp
+pip install -e .
+```
+
 ## Quickstart
 
 ```bash
-pip install -e .
 jmunch-mcp init
 ```
 
