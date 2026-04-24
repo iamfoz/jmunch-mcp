@@ -33,7 +33,7 @@ def default_db_path() -> Path:
     return Path.home() / ".jmunch" / "metrics.db"
 
 
-_SCHEMA = """
+_SCHEMA_TABLE = """
 CREATE TABLE IF NOT EXISTS calls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,
@@ -47,8 +47,14 @@ CREATE TABLE IF NOT EXISTS calls (
     handle_created INTEGER NOT NULL DEFAULT 0,
     is_error INTEGER NOT NULL DEFAULT 0,
     surface TEXT NOT NULL DEFAULT 'mcp',
-    tokens_saved_exact INTEGER NOT NULL DEFAULT 0
+    tokens_saved_exact INTEGER NOT NULL DEFAULT 0,
+    upstream_bytes_sent INTEGER NOT NULL DEFAULT 0,
+    upstream_bytes_received INTEGER NOT NULL DEFAULT 0,
+    upstream_calls INTEGER NOT NULL DEFAULT 0
 );
+"""
+
+_SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);
 CREATE INDEX IF NOT EXISTS idx_calls_upstream ON calls(upstream);
 CREATE INDEX IF NOT EXISTS idx_calls_surface ON calls(surface);
@@ -63,6 +69,12 @@ def _migrate(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE calls ADD COLUMN surface TEXT NOT NULL DEFAULT 'mcp'")
     if "tokens_saved_exact" not in cols:
         con.execute("ALTER TABLE calls ADD COLUMN tokens_saved_exact INTEGER NOT NULL DEFAULT 0")
+    if "upstream_bytes_sent" not in cols:
+        con.execute("ALTER TABLE calls ADD COLUMN upstream_bytes_sent INTEGER NOT NULL DEFAULT 0")
+    if "upstream_bytes_received" not in cols:
+        con.execute("ALTER TABLE calls ADD COLUMN upstream_bytes_received INTEGER NOT NULL DEFAULT 0")
+    if "upstream_calls" not in cols:
+        con.execute("ALTER TABLE calls ADD COLUMN upstream_calls INTEGER NOT NULL DEFAULT 0")
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -70,8 +82,9 @@ def _connect(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(str(path), timeout=2.0, isolation_level=None)
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
-    con.executescript(_SCHEMA)
+    con.executescript(_SCHEMA_TABLE)
     _migrate(con)
+    con.executescript(_SCHEMA_INDEXES)
     return con
 
 
@@ -106,6 +119,9 @@ class MetricsDB:
         ts: float | None = None,
         surface: str = "mcp",
         tokens_saved_exact: int = 0,
+        upstream_bytes_sent: int = 0,
+        upstream_bytes_received: int = 0,
+        upstream_calls: int = 0,
     ) -> None:
         if self._con is None:
             return
@@ -113,8 +129,9 @@ class MetricsDB:
             self._con.execute(
                 "INSERT INTO calls (ts, upstream, tool, request_bytes, raw_bytes, "
                 "response_bytes, saved_bytes, duration_ms, handle_created, is_error, "
-                "surface, tokens_saved_exact) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "surface, tokens_saved_exact, upstream_bytes_sent, "
+                "upstream_bytes_received, upstream_calls) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     ts if ts is not None else time.time(),
                     upstream, tool,
@@ -124,6 +141,9 @@ class MetricsDB:
                     1 if is_error else 0,
                     surface,
                     int(tokens_saved_exact),
+                    int(upstream_bytes_sent),
+                    int(upstream_bytes_received),
+                    int(upstream_calls),
                 ),
             )
         except sqlite3.Error as e:
@@ -181,12 +201,20 @@ def _surface_clause(surface: str | None) -> tuple[str, tuple]:
     return "", ()
 
 
-def totals(path: Path | None = None, *, surface: str | None = None) -> dict:
-    """Cumulative totals across the whole DB."""
+def totals(path: Path | None = None, *, surface: str | None = None,
+           include_zero_savings: bool = False) -> dict:
+    """Cumulative totals across the whole DB.
+
+    By default the dashboard-oriented `saved_bytes > 0` filter is applied so
+    zero-savings rows (passthroughs, handle ops, errors) don't skew the
+    savings view. Pass `include_zero_savings=True` for baseline measurements
+    where you need the raw traffic total regardless of interception outcome.
+    """
     p = path or default_db_path()
     if not p.exists():
         return _empty_totals()
     clause, params = _surface_clause(surface)
+    where = "1=1" if include_zero_savings else _ONLY_WITH_SAVINGS
     with _reader(p) as con:
         row = con.execute(
             "SELECT COUNT(*) AS n, "
@@ -195,8 +223,11 @@ def totals(path: Path | None = None, *, surface: str | None = None) -> dict:
             "       COALESCE(SUM(saved_bytes), 0) AS saved, "
             "       COALESCE(SUM(tokens_saved_exact), 0) AS saved_exact, "
             "       COALESCE(SUM(handle_created), 0) AS handles, "
-            "       COALESCE(SUM(is_error), 0) AS errors "
-            f"FROM calls WHERE {_ONLY_WITH_SAVINGS} {clause}",
+            "       COALESCE(SUM(is_error), 0) AS errors, "
+            "       COALESCE(SUM(upstream_bytes_sent), 0) AS up_sent, "
+            "       COALESCE(SUM(upstream_bytes_received), 0) AS up_recv, "
+            "       COALESCE(SUM(upstream_calls), 0) AS up_calls "
+            f"FROM calls WHERE {where} {clause}",
             params,
         ).fetchone()
     return {
@@ -208,13 +239,17 @@ def totals(path: Path | None = None, *, surface: str | None = None) -> dict:
         "errors": row["errors"],
         "tokens_saved": row["saved"] // 4,
         "tokens_saved_exact": row["saved_exact"],
+        "upstream_bytes_sent": row["up_sent"],
+        "upstream_bytes_received": row["up_recv"],
+        "upstream_calls": row["up_calls"],
     }
 
 
 def _empty_totals() -> dict:
     return {"calls": 0, "raw_bytes": 0, "response_bytes": 0, "saved_bytes": 0,
             "handles_created": 0, "errors": 0, "tokens_saved": 0,
-            "tokens_saved_exact": 0}
+            "tokens_saved_exact": 0,
+            "upstream_bytes_sent": 0, "upstream_bytes_received": 0, "upstream_calls": 0}
 
 
 def per_upstream(path: Path | None = None, *, surface: str | None = None) -> list[dict]:

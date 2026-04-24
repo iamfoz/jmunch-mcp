@@ -19,6 +19,7 @@ name = "anthropic"
 kind = "openai"                                  # route via the OpenAI-compat path
 base_url = "https://api.anthropic.com"           # Anthropic's OpenAI-compat endpoint
 api_key_env = "ANTHROPIC_API_KEY"
+scrub_params = ["temperature"]                   # Opus 4.7 rejects `temperature` via OpenAI-compat
 
 [interception]
 threshold_tokens = 1000000000    # 4 GB — nothing trips this

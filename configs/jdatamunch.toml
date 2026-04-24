@@ -1,0 +1,10 @@
+# jmunch-mcp config for 'jdatamunch' upstream.
+# Registered in Claude Desktop
+
+threshold_tokens = 2000
+log_level = "INFO"
+report = false
+
+[upstream]
+command = "jdatamunch-mcp"
+args = []

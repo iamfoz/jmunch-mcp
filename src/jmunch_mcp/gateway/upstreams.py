@@ -28,6 +28,9 @@ class UpstreamError(Exception):
 
 class Upstream(Protocol):
     spec: UpstreamSpec
+    bytes_sent_upstream: int
+    bytes_received_upstream: int
+    upstream_calls: int
 
     async def complete(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -38,12 +41,22 @@ class Upstream(Protocol):
 
 class _BaseHTTPUpstream:
     """Shared aiohttp session management. aiohttp is imported lazily so the
-    package still imports without the [gateway] extra installed."""
+    package still imports without the [gateway] extra installed.
+
+    Each instance tracks cumulative bytes POSTed to and received from the
+    real upstream. These counters span the whole lifetime of the Upstream
+    instance (which the gateway creates per app-side request), so summing
+    them gives the true cost of handling one app-side request — including
+    every verb-loop iteration.
+    """
 
     def __init__(self, spec: UpstreamSpec) -> None:
         self.spec = spec
         self._session: Any = None  # aiohttp.ClientSession, lazy
         self._aiohttp: Any = None
+        self.bytes_sent_upstream = 0      # total body bytes POSTed to upstream
+        self.bytes_received_upstream = 0  # total body bytes received from upstream
+        self.upstream_calls = 0           # POST count (for diagnostics)
 
     def _ensure_session(self) -> Any:
         if self._session is None:
@@ -64,6 +77,14 @@ class _BaseHTTPUpstream:
             self._session = None
 
 
+def _scrub(body: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    if not keys:
+        return body
+    for k in keys:
+        body.pop(k, None)
+    return body
+
+
 class OpenAIUpstream(_BaseHTTPUpstream):
     """Speaks OpenAI's `/v1/chat/completions`. Works for the real OpenAI API,
     Ollama, OpenRouter, LM Studio, and anything else OpenAI-compatible."""
@@ -77,10 +98,19 @@ class OpenAIUpstream(_BaseHTTPUpstream):
 
         # Always non-streaming in Phase 1 regardless of what the app requested.
         body = dict(request)
+        body = _scrub(body, self.spec.scrub_params)
         body["stream"] = False
+        # `stream_options` is only valid alongside `stream=true`. If the app
+        # sent streaming opts but we're forcing non-streaming, drop them so
+        # strict upstreams (e.g. Anthropic's OpenAI-compat) don't 400.
+        body.pop("stream_options", None)
 
-        async with session.post(url, json=body, headers=headers) as resp:
+        payload = json.dumps(body).encode("utf-8")
+        self.bytes_sent_upstream += len(payload)
+        self.upstream_calls += 1
+        async with session.post(url, data=payload, headers=headers) as resp:
             text = await resp.text()
+            self.bytes_received_upstream += len(text.encode("utf-8"))
             if resp.status >= 400:
                 raise UpstreamError(resp.status, text)
             try:
@@ -95,12 +125,19 @@ class OpenAIUpstream(_BaseHTTPUpstream):
         if self.spec.api_key:
             headers["Authorization"] = f"Bearer {self.spec.api_key}"
         body = dict(request)
+        body = _scrub(body, self.spec.scrub_params)
         body["stream"] = True
-        async with session.post(url, json=body, headers=headers) as resp:
+
+        payload = json.dumps(body).encode("utf-8")
+        self.bytes_sent_upstream += len(payload)
+        self.upstream_calls += 1
+        async with session.post(url, data=payload, headers=headers) as resp:
             if resp.status >= 400:
                 text = await resp.text()
+                self.bytes_received_upstream += len(text.encode("utf-8"))
                 raise UpstreamError(resp.status, text)
             async for piece in resp.content.iter_any():
+                self.bytes_received_upstream += len(piece)
                 yield piece
 
 
@@ -115,10 +152,15 @@ class AnthropicUpstream(_BaseHTTPUpstream):
             headers["x-api-key"] = self.spec.api_key
 
         body = dict(request)
+        body = _scrub(body, self.spec.scrub_params)
         body["stream"] = False
 
-        async with session.post(url, json=body, headers=headers) as resp:
+        payload = json.dumps(body).encode("utf-8")
+        self.bytes_sent_upstream += len(payload)
+        self.upstream_calls += 1
+        async with session.post(url, data=payload, headers=headers) as resp:
             text = await resp.text()
+            self.bytes_received_upstream += len(text.encode("utf-8"))
             if resp.status >= 400:
                 raise UpstreamError(resp.status, text)
             return json.loads(text)
@@ -131,12 +173,19 @@ class AnthropicUpstream(_BaseHTTPUpstream):
         if self.spec.api_key:
             headers["x-api-key"] = self.spec.api_key
         body = dict(request)
+        body = _scrub(body, self.spec.scrub_params)
         body["stream"] = True
-        async with session.post(url, json=body, headers=headers) as resp:
+
+        payload = json.dumps(body).encode("utf-8")
+        self.bytes_sent_upstream += len(payload)
+        self.upstream_calls += 1
+        async with session.post(url, data=payload, headers=headers) as resp:
             if resp.status >= 400:
                 text = await resp.text()
+                self.bytes_received_upstream += len(text.encode("utf-8"))
                 raise UpstreamError(resp.status, text)
             async for piece in resp.content.iter_any():
+                self.bytes_received_upstream += len(piece)
                 yield piece
 
 

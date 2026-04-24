@@ -1,6 +1,4 @@
 {
-  "_comment": "Drop this at ~/.nanobot/config.json. Points nanobot at the jmunch gateway on 127.0.0.1:7879 via nanobot's 'custom' OpenAI-compatible provider. The apiKey here is a dummy — nanobot's OpenAI-compat client sends it in the Authorization header, but jmunch strips that and uses its own upstream key (ANTHROPIC_API_KEY) when forwarding to Anthropic's OpenAI-compat endpoint. Model name is the Claude model directly (no provider/ prefix — Anthropic's OpenAI-compat endpoint accepts bare Claude model names).",
-
   "providers": {
     "custom": {
       "apiKey": "sk-dummy-jmunch-injects-the-real-key",
@@ -10,14 +8,15 @@
   "agents": {
     "defaults": {
       "provider": "custom",
-      "model": "claude-opus-4-7"
+      "model": "claude-opus-4-7",
+      "maxToolResultChars": 1000000
     }
   },
   "tools": {
     "mcpServers": {
-      "fetch": {
-        "command": "uvx",
-        "args": ["mcp-server-fetch"]
+      "demo": {
+        "command": "python",
+        "args": ["C:/MCPs/jmunch-mcp/bench/nanobot/demo/demo_server.py"]
       }
     }
   }

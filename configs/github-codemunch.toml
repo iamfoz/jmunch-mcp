@@ -1,0 +1,11 @@
+# jmunch-mcp config for 'github-codemunch' upstream.
+# Registered in Claude Desktop
+# Requires GITHUB_TOKEN in your environment.
+
+threshold_tokens = 2000
+log_level = "INFO"
+report = false
+
+[upstream]
+command = "python"
+args = ["-m", "github_codemunch_mcp.server"]

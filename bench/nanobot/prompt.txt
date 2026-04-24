@@ -1,1 +1,1 @@
-Fetch https://en.wikipedia.org/wiki/SQLite and then tell me the three most historically interesting dates mentioned on that page, with a one-sentence explanation of what happened on each date.
+Call the get_document tool to retrieve the SQLite article. Then answer this single question: What year was SQLite 3.0 released, and what was the most notable feature introduced in that release? Give a one-sentence answer quoting the specific phrase from the document that supports it.

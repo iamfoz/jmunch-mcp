@@ -33,3 +33,12 @@ Thumbs.db
 *.log
 *.bak
 ~/.jmunch/
+.claude/
+
+# Bench runtime artifacts
+bench/nanobot/.metrics*.db
+bench/nanobot/results.csv
+bench/nanobot/gateway-on-7880.toml
+bench/nanobot/demo/demo_doc.txt
+bench/nanobot/demo/gateway-left.toml
+bench/nanobot/demo/gateway-right.toml

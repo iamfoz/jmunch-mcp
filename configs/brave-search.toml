@@ -1,0 +1,11 @@
+# jmunch-mcp config for 'brave-search' upstream.
+# Web + local search via Brave
+# Requires BRAVE_API_KEY in your environment.
+
+threshold_tokens = 2000
+log_level = "INFO"
+report = false
+
+[upstream]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-brave-search"]

@@ -19,6 +19,7 @@ class UpstreamSpec:
     kind: str                 # "openai" | "anthropic"
     base_url: str
     api_key_env: str | None = None  # env var to read key from; default by kind
+    scrub_params: tuple[str, ...] = ()  # top-level request fields to drop before forwarding
 
     @property
     def api_key(self) -> str | None:
@@ -108,6 +109,7 @@ def load(path: str | os.PathLike) -> GatewayConfig:
             kind=str(raw["kind"]),
             base_url=str(raw["base_url"]).rstrip("/"),
             api_key_env=raw.get("api_key_env"),
+            scrub_params=tuple(str(x) for x in (raw.get("scrub_params") or ())),
         ))
     if not upstreams:
         raise ValueError(f"{p}: at least one [[upstream]] is required")

@@ -19,7 +19,14 @@
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-METRICS_DB="${HERE}/.metrics.db"
+# On Git Bash / MSYS, `pwd` returns /c/... which Python on Windows can't open.
+# Translate to native form for paths that Python reads.
+if command -v cygpath >/dev/null 2>&1; then
+  HERE_NATIVE="$(cygpath -m "${HERE}")"
+else
+  HERE_NATIVE="${HERE}"
+fi
+METRICS_DB="${HERE_NATIVE}/.metrics.db"
 CSV="${HERE}/results.csv"
 PROMPT="$(cat "${HERE}/prompt.txt")"
 
@@ -64,9 +71,10 @@ _run_one() {
   echo "--- nanobot turn ---"
   nanobot agent --message "${PROMPT}" --no-logs || true
   echo "--- end turn ---"
-  sleep 1    # let the metrics row flush to sqlite
+  sleep 3    # let the metrics row flush + WAL checkpoint
   kill "${gw}" 2>/dev/null || true
   wait "${gw}" 2>/dev/null || true
+  sleep 1
   trap - EXIT
 }
 
@@ -74,7 +82,7 @@ _run_one "off" "${HERE}/gateway-off.toml"
 OFF_METRICS="$("${PYTHON}" -c "
 import os; os.environ['JMUNCH_METRICS_DB']='${METRICS_DB}'
 from jmunch_mcp import metrics
-t = metrics.totals(surface='gateway')
+t = metrics.totals(surface='gateway', include_zero_savings=True)
 print(f'{t[\"raw_bytes\"]},{t[\"response_bytes\"]},{t[\"saved_bytes\"]},{t[\"tokens_saved\"]},{t[\"tokens_saved_exact\"]}')
 ")"
 
@@ -86,7 +94,7 @@ _run_one "on" "${HERE}/gateway-on.toml"
 ON_METRICS="$("${PYTHON}" -c "
 import os; os.environ['JMUNCH_METRICS_DB']='${METRICS_DB}'
 from jmunch_mcp import metrics
-t = metrics.totals(surface='gateway')
+t = metrics.totals(surface='gateway', include_zero_savings=True)
 print(f'{t[\"raw_bytes\"]},{t[\"response_bytes\"]},{t[\"saved_bytes\"]},{t[\"tokens_saved\"]},{t[\"tokens_saved_exact\"]}')
 ")"
 

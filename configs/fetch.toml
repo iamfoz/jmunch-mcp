@@ -1,0 +1,10 @@
+# jmunch-mcp config for 'fetch' upstream.
+# HTTP fetch — returns raw page bodies
+
+threshold_tokens = 2000
+log_level = "INFO"
+report = false
+
+[upstream]
+command = "uvx"
+args = ["mcp-server-fetch"]
