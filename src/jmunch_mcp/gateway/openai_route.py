@@ -355,11 +355,13 @@ async def _verb_loop(
         # Build compact messages: base + optional prior-verbs note + single
         # latest verb call + its full result.
         compact_messages: list[Any] = list(base_messages)
-        if verb_trail:
-            compact_messages.append({
-                "role": "system",
-                "content": _prior_verbs_note(verb_trail),
-            })
+        if verb_trail and compact_messages and compact_messages[0].get("role") == "system":
+            # Merge prior-verbs into the existing system message to maintain
+            # "system must be first" ordering required by upstream providers
+            # (e.g. litellm/OpenAI API rejects system messages not at position 0).
+            base_system = compact_messages[0]
+            prior_text = _prior_verbs_note(verb_trail)
+            base_system["content"] = base_system["content"] + "\n\n" + prior_text
         compact_messages.append({
             "role": "assistant",
             "content": message.get("content"),
