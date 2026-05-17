@@ -57,6 +57,8 @@ class GatewayConfig:
     interception: Interception = field(default_factory=Interception)
     handles: HandleStore = field(default_factory=HandleStore)
     log_level: str = "INFO"
+    # Cache TTL for /v1/models passthrough (per upstream). 0 disables caching.
+    models_cache_ttl_seconds: int = 60
 
     def upstream(self, name: str) -> UpstreamSpec | None:
         for u in self.upstreams:
@@ -99,6 +101,7 @@ def load(path: str | os.PathLike) -> GatewayConfig:
     listen = str(g.get("listen", "127.0.0.1:7879"))
     default_upstream = str(g.get("default_upstream", "openai"))
     log_level = str(g.get("log_level", "INFO"))
+    models_cache_ttl_seconds = int(g.get("models_cache_ttl_seconds", 60))
 
     upstreams = []
     for raw in data.get("upstream", []) or []:
@@ -136,4 +139,5 @@ def load(path: str | os.PathLike) -> GatewayConfig:
         interception=interception,
         handles=handles,
         log_level=log_level,
+        models_cache_ttl_seconds=models_cache_ttl_seconds,
     )
