@@ -68,14 +68,22 @@ def should_inject(request_tools: list[Any] | None, mode: str) -> bool:
     return bool(request_tools)
 
 
-def inject_into_openai_request(req: dict[str, Any], *, mode: str = "auto") -> dict[str, Any]:
+def inject_into_openai_request(req: dict[str, Any], *, mode: str = "auto", default_model: str = "") -> dict[str, Any]:
     """Return a shallow copy of the request with jmunch tools appended to `tools`.
 
     Idempotent: a tool whose name already exists in the request is not duplicated.
+
+    `default_model` substitutes into `req["model"]` when the inbound request
+    omitted the field, so the forwarded request always has a valid model. Pass
+    the second element of `GatewayConfig.resolve_upstream()`'s return tuple.
     """
-    existing = req.get("tools")
+    out = dict(req)
+    if not out.get("model") and default_model:
+        out["model"] = default_model
+
+    existing = out.get("tools")
     if not should_inject(existing if isinstance(existing, list) else None, mode):
-        return req
+        return out
 
     merged = list(existing) if isinstance(existing, list) else []
     have_names = {
@@ -85,15 +93,20 @@ def inject_into_openai_request(req: dict[str, Any], *, mode: str = "auto") -> di
         if jt["function"]["name"] not in have_names:
             merged.append(jt)
 
-    out = dict(req)
     out["tools"] = merged
     return out
 
 
-def inject_into_anthropic_request(req: dict[str, Any], *, mode: str = "auto") -> dict[str, Any]:
-    existing = req.get("tools")
+def inject_into_anthropic_request(req: dict[str, Any], *, mode: str = "auto", default_model: str = "") -> dict[str, Any]:
+    """`default_model` substitutes into `req["model"]` when the inbound request
+    omitted the field."""
+    out = dict(req)
+    if not out.get("model") and default_model:
+        out["model"] = default_model
+
+    existing = out.get("tools")
     if not should_inject(existing if isinstance(existing, list) else None, mode):
-        return req
+        return out
 
     merged = list(existing) if isinstance(existing, list) else []
     have_names = {t.get("name") for t in merged if isinstance(t, dict)}
@@ -101,6 +114,5 @@ def inject_into_anthropic_request(req: dict[str, Any], *, mode: str = "auto") ->
         if jt["name"] not in have_names:
             merged.append(jt)
 
-    out = dict(req)
     out["tools"] = merged
     return out
