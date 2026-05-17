@@ -174,7 +174,10 @@ def build_aiohttp_app(gateway: GatewayApp):
     async def models_passthrough(request):
         header = request.headers.get("X-Jmunch-Upstream")
         try:
-            spec = gateway.config.resolve_upstream(header=header, model=None)
+            # resolve_upstream returns (spec, resolved_model) since
+            # default_model fallback was added. The model side is unused
+            # here — /v1/models doesn't take a model parameter.
+            spec, _resolved_model = gateway.config.resolve_upstream(header=header, model=None)
         except ValueError:
             return web.json_response({"object": "list", "data": []})
 
