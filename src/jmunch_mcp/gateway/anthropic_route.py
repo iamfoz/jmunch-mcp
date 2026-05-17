@@ -241,7 +241,7 @@ async def handle_messages(
 
     model = req_body.get("model")
     model_s = model if isinstance(model, str) else None
-    spec = config.resolve_upstream(header=upstream_override, model=model_s)
+    spec, resolved_model = config.resolve_upstream(header=upstream_override, model=model_s)
     if spec.kind != "anthropic":
         return 400, {"type": "error", "error": {
             "type": "invalid_request_error",
@@ -255,7 +255,7 @@ async def handle_messages(
         req_body, registry=registry, tracker=tracker,
         threshold_tokens=config.interception.threshold_tokens,
     )
-    prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
 
     upstream: Upstream = upstream_factory(spec)
@@ -320,7 +320,7 @@ async def stream_messages(
 
     model = req_body.get("model")
     model_s = model if isinstance(model, str) else None
-    spec = config.resolve_upstream(header=upstream_override, model=model_s)
+    spec, resolved_model = config.resolve_upstream(header=upstream_override, model=model_s)
     if spec.kind != "anthropic":
         return 400, encode_error_as_sse(
             make_error(UPSTREAM_ERROR, f"upstream '{spec.name}' is kind={spec.kind}", status=400)
@@ -333,7 +333,7 @@ async def stream_messages(
         req_body, registry=registry, tracker=tracker,
         threshold_tokens=config.interception.threshold_tokens,
     )
-    prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
     prepped = dict(prepped)
     prepped["stream"] = True
