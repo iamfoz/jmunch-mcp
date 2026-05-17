@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gateway: `/v1/models` is now a real upstream passthrough.** Previously a
+  Phase 1 stub that always returned `{"object":"list","data":[]}`. The handler
+  now resolves an upstream (via `X-Jmunch-Upstream` header or config default),
+  GETs `/v1/models` against it, and returns the response verbatim — so clients
+  that depend on `context_length` and other catalog metadata (e.g. Hermes'
+  endpoint detection and adaptive context window) work correctly. Cached per
+  upstream for `gateway.models_cache_ttl_seconds` (default 60s; set to 0 to
+  disable). Anthropic-kind upstreams continue to return the empty stub since
+  Anthropic's catalog isn't OpenAI-shaped.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed
