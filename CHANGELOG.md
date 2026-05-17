@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Gateway: streaming `usage` is now preserved end-to-end.** The
+  buffer-then-replay path collapsed every upstream stream into a single
+  chunk with `usage: null`, so OpenAI-SDK clients (Hermes, LangChain,
+  any caller that opts into `stream_options.include_usage=True`) saw
+  zero token totals for every call. `assemble_response_from_chunks` now
+  captures `usage` from whichever chunk carries it (spec-compliant
+  trailing chunk with `choices: []`, or inline on the final
+  content-bearing chunk for non-compliant upstreams) and `encode_as_sse`
+  emits a separate trailing usage frame so the wire shape matches the
+  OpenAI streaming spec. Clients that didn't request usage see an extra
+  empty-choices chunk and ignore it gracefully.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed
