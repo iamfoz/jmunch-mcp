@@ -36,6 +36,8 @@ class Upstream(Protocol):
 
     async def stream(self, request: dict[str, Any]) -> AsyncIterator[bytes]: ...  # Phase 2
 
+    async def list_models(self) -> dict[str, Any]: ...
+
     async def close(self) -> None: ...
 
 
@@ -140,6 +142,22 @@ class OpenAIUpstream(_BaseHTTPUpstream):
                 self.bytes_received_upstream += len(piece)
                 yield piece
 
+    async def list_models(self) -> dict[str, Any]:
+        session = self._ensure_session()
+        url = f"{self.spec.base_url}/v1/models"
+        headers: dict[str, str] = {}
+        if self.spec.api_key:
+            headers["Authorization"] = f"Bearer {self.spec.api_key}"
+        async with session.get(url, headers=headers) as resp:
+            text = await resp.text()
+            self.bytes_received_upstream += len(text.encode("utf-8"))
+            if resp.status >= 400:
+                raise UpstreamError(resp.status, text)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                raise UpstreamError(resp.status, text) from e
+
 
 class AnthropicUpstream(_BaseHTTPUpstream):
     """Speaks Anthropic's `/v1/messages`. Phase 3 wires this into the router."""
@@ -187,6 +205,11 @@ class AnthropicUpstream(_BaseHTTPUpstream):
             async for piece in resp.content.iter_any():
                 self.bytes_received_upstream += len(piece)
                 yield piece
+
+    async def list_models(self) -> dict[str, Any]:
+        # Anthropic's catalog isn't OpenAI-shaped (no `context_length` field
+        # in the same form). Callers should fall back when this raises.
+        raise NotImplementedError("anthropic upstream does not expose an OpenAI-shaped /v1/models")
 
 
 def build(spec: UpstreamSpec) -> Upstream:
