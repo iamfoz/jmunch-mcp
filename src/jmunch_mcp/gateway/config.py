@@ -20,6 +20,7 @@ class UpstreamSpec:
     base_url: str
     api_key_env: str | None = None  # env var to read key from; default by kind
     scrub_params: tuple[str, ...] = ()  # top-level request fields to drop before forwarding
+    default_model: str = ""  # fallback model when the inbound request omits one
 
     @property
     def api_key(self) -> str | None:
@@ -66,25 +67,29 @@ class GatewayConfig:
                 return u
         return None
 
-    def resolve_upstream(self, *, header: str | None, model: str | None) -> UpstreamSpec:
-        """Pick upstream by header → model prefix → default."""
+    def resolve_upstream(self, *, header: str | None, model: str | None) -> tuple[UpstreamSpec, str]:
+        """Pick upstream by header → model prefix → default.
+
+        Returns (upstream_spec, resolved_model). resolved_model is the inbound
+        request's model if it was provided, else the chosen upstream's
+        default_model (which may also be ""). Callers should substitute
+        resolved_model into the forwarded request when the original model
+        field was missing or empty, so the upstream always sees a model.
+        """
+        spec: UpstreamSpec | None = None
         if header:
-            found = self.upstream(header)
-            if found:
-                return found
-        if model:
+            spec = self.upstream(header)
+        if spec is None and model:
             if model.startswith("claude"):
-                found = self.upstream_by_kind("anthropic")
-                if found:
-                    return found
-            if model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
-                found = self.upstream_by_kind("openai")
-                if found:
-                    return found
-        default = self.upstream(self.default_upstream)
-        if default is None:
+                spec = self.upstream_by_kind("anthropic")
+            elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
+                spec = self.upstream_by_kind("openai")
+        if spec is None:
+            spec = self.upstream(self.default_upstream)
+        if spec is None:
             raise ValueError(f"default_upstream '{self.default_upstream}' is not defined in config")
-        return default
+        resolved_model = model if model else spec.default_model
+        return spec, resolved_model
 
     def upstream_by_kind(self, kind: str) -> UpstreamSpec | None:
         for u in self.upstreams:
@@ -113,6 +118,7 @@ def load(path: str | os.PathLike) -> GatewayConfig:
             base_url=str(raw["base_url"]).rstrip("/"),
             api_key_env=raw.get("api_key_env"),
             scrub_params=tuple(str(x) for x in (raw.get("scrub_params") or ())),
+            default_model=str(raw.get("default_model", "")),
         ))
     if not upstreams:
         raise ValueError(f"{p}: at least one [[upstream]] is required")

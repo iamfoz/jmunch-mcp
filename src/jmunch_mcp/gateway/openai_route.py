@@ -416,7 +416,7 @@ async def handle_chat_completions(
 
     model = req_body.get("model")
     model_s = model if isinstance(model, str) else None
-    spec = config.resolve_upstream(header=upstream_override, model=model_s)
+    spec, resolved_model = config.resolve_upstream(header=upstream_override, model=model_s)
     if spec.kind != "openai":
         return 400, {
             "error": {
@@ -435,7 +435,7 @@ async def handle_chat_completions(
         tracker=tracker,
         threshold_tokens=config.interception.threshold_tokens,
     )
-    prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
+    prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
 
     upstream: Upstream = upstream_factory(spec)
@@ -526,7 +526,7 @@ async def stream_chat_completions(
 
     model = req_body.get("model")
     model_s = model if isinstance(model, str) else None
-    spec = config.resolve_upstream(header=upstream_override, model=model_s)
+    spec, resolved_model = config.resolve_upstream(header=upstream_override, model=model_s)
     if spec.kind != "openai":
         resp = {"error": {
             "message": f"upstream '{spec.name}' is kind={spec.kind}",
@@ -542,7 +542,7 @@ async def stream_chat_completions(
         registry=registry, tracker=tracker,
         threshold_tokens=config.interception.threshold_tokens,
     )
-    prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
+    prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
     # Ensure upstream sees stream=true for the first turn.
     prepped = dict(prepped)
