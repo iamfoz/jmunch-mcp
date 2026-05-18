@@ -312,7 +312,15 @@ async def _verb_loop(
     needs multiple drill-ins to answer.
     """
     base_messages = _compact_base_messages(list(working.get("messages") or []))
-    base_tools = _jmunch_only_tools(working.get("tools"))
+    # Preserve the original tools array (app tools + jmunch verbs) across
+    # all verb-loop iterations. Stripping to jmunch-only saved a few KB
+    # per drill-in round but caused the model to mistakenly conclude its
+    # app tools were unavailable when an iteration's response went back
+    # to the client as text (e.g. cron health-check jobs reporting
+    # "I do not have access to a terminal/bash tool" because the only
+    # tools visible to the model during a peek/slice iteration were
+    # jmunch_* verbs).
+    base_tools = working.get("tools")
     verb_trail: list[dict[str, Any]] = []  # past verbs: {name, args_brief, result_brief}
     response = first_response
     rounds = 0
