@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from ..meta import SavingsTracker
@@ -19,7 +20,7 @@ from ..verbs import Dispatcher
 from .config import GatewayConfig, UpstreamSpec
 from .anthropic_route import handle_messages, stream_messages
 from .openai_route import handle_chat_completions, stream_chat_completions
-from .upstreams import build as build_upstream
+from .upstreams import UpstreamError, build as build_upstream
 
 log = logging.getLogger("jmunch.gateway.server")
 
@@ -39,6 +40,8 @@ class GatewayApp:
         self.dispatcher = Dispatcher(self.registry, self.stats)
         self.metrics = MetricsDB()
         self.token_counter = TokenCounter()
+        # name → (cached_at_monotonic, body) for /v1/models passthrough
+        self._models_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     def upstream_factory(self, spec: UpstreamSpec):
         return build_upstream(spec)
@@ -169,9 +172,49 @@ def build_aiohttp_app(gateway: GatewayApp):
         return web.json_response(resp, status=status)
 
     async def models_passthrough(request):
-        # Phase 1: return an empty list. Apps that don't call this endpoint
-        # (most do not after the first handshake) are unaffected.
-        return web.json_response({"object": "list", "data": []})
+        header = request.headers.get("X-Jmunch-Upstream")
+        try:
+            # resolve_upstream returns (spec, resolved_model) since
+            # default_model fallback was added. The model side is unused
+            # here — /v1/models doesn't take a model parameter.
+            spec, _resolved_model = gateway.config.resolve_upstream(header=header, model=None)
+        except ValueError:
+            return web.json_response({"object": "list", "data": []})
+
+        # Anthropic catalog isn't OpenAI-shaped; fall back to empty stub
+        # so this endpoint stays backwards-compatible for Anthropic-only setups.
+        if spec.kind != "openai":
+            return web.json_response({"object": "list", "data": []})
+
+        ttl = max(0, gateway.config.models_cache_ttl_seconds)
+        now = time.monotonic()
+        cached = gateway._models_cache.get(spec.name)
+        if cached and ttl > 0 and (now - cached[0]) < ttl:
+            return web.json_response(cached[1])
+
+        upstream = gateway.upstream_factory(spec)
+        try:
+            body = await upstream.list_models()
+        except NotImplementedError:
+            return web.json_response({"object": "list", "data": []})
+        except UpstreamError as e:
+            try:
+                err_body = json.loads(e.body)
+            except (ValueError, json.JSONDecodeError):
+                err_body = {"error": {"message": e.body[:500]}}
+            return web.json_response(err_body, status=e.status)
+        except Exception as e:
+            log.warning("models_passthrough: upstream %r unreachable: %s", spec.name, e)
+            return web.json_response(
+                {"error": {"message": f"upstream {spec.name!r} unreachable: {e}"}},
+                status=502,
+            )
+        finally:
+            await upstream.close()
+
+        if ttl > 0:
+            gateway._models_cache[spec.name] = (now, body)
+        return web.json_response(body)
 
     async def health(request):
         return web.json_response({
