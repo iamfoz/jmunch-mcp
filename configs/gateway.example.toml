@@ -37,6 +37,34 @@ threshold_tokens = 2000
 # never:  never inject; pure pass-through + request-side handle-ify only
 inject_tools = "auto"
 
+# Context-aware gate. A request is only handle-ified once its estimated
+# size reaches this fraction of the model's context window.
+# On a big-context model, compressing a request that comfortably fits
+# only sheds detail the model still has room to hold — which shows up as
+# "forgets mid-task". 0.0 disables the gate (compress every request, the
+# previous behaviour). 0.5 = start compressing at half the window.
+context_fraction = 0.5
+
+# Recency window. Never handle-ify the last N tool_results in a
+# request — they are the agent's live working set, and compressing them
+# while it is mid-task is the most direct cause of dropped context.
+# Older tool_results in the history are still compressed. 0 disables it.
+recency_window = 4
+
+# Context window (tokens) assumed for models not in the built-in table.
+default_context_window = 128000
+
+# Master switch for request-side handle-ification. Leave true; the
+# `X-Jmunch-Handleify: false` request header flips it off per-call.
+handleify = true
+
+# Optional: teach the gateway about custom / newly released models.
+# Exact name or name-prefix → context window in tokens. Wins over the
+# built-in table.
+# [interception.context_windows]
+# "qwen3.6" = 262144
+# "my-finetune" = 131072
+
 [handles]
 # TTL + persistent SQLite store ships in Phase 4. For Phase 1 handles are
 # in-memory and session-scoped (matches today's MCP behavior).

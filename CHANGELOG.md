@@ -5,6 +5,67 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Context-aware handle-ification.** The gateway now gates request-side
+  compression on request size *relative to the model's context window*.
+  New `[interception]` keys:
+  - `context_fraction` — only handle-ify once the request reaches this
+    fraction of the window. `0.0` (default) keeps the previous behaviour
+    (compress every request). On a big-context model (Qwen3 262k,
+    GPT-4.1 1M) this stops the gateway compressing context that would
+    have fit fine — the root cause of agents "forgetting" mid-task.
+  - `default_context_window` and `[interception.context_windows]` — the
+    window size assumed per model. A built-in prefix table covers common
+    GPT / Claude / Qwen / Llama / Gemini / Mistral / DeepSeek models;
+    the table teaches the gateway about custom or newly released ones.
+- **Recency window.** `[interception] recency_window` leaves the last N
+  tool_results in a request verbatim — they are the agent's live working
+  set, and compressing them mid-task is the most direct cause of dropped
+  context. Older history is still compressed. `0` (default) disables it.
+- **`X-Jmunch-Handleify: false` request header.** Disables request-side
+  handle-ification for a single call so the upstream receives raw
+  tool_result content untouched. `X-Jmunch-Inject: false` still controls
+  verb injection only; the two are now independent. A `[interception]
+  handleify` key sets the gateway-wide default.
+- **`X-Jmunch-Gateway: <version>` response header.** Stamped on every
+  gateway response (including `/health`, `/v1/models`, and error
+  responses). Its presence lets any downstream tool detect a jmunch
+  gateway definitively, with no port heuristics. `/health` also reports
+  `version`.
+- `tests/gateway/test_context_aware.py` covering the context-window
+  table, the fraction gate, the recency window, the handleify switch,
+  and config loading/validation of the new keys.
+
+### Changed
+- Gateway config `Interception` gained `context_fraction`,
+  `recency_window`, `default_context_window`, `context_windows`, and
+  `handleify_enabled`. All default to the previous behaviour, so existing
+  `gateway.toml` files are unaffected; `configs/gateway.example.toml`
+  ships the recommended values.
+
+### Fixed
+- **Savings tracker over-count.** Handle-ification called `envelope()`
+  with `response_bytes=0`, so the persistent `SavingsTracker` (and the
+  dashboard total it feeds) was credited with `raw_bytes/4` of savings
+  on every handle — far more than the handle envelope actually saved.
+  `envelope()` now self-measures its serialized size when `response_bytes`
+  is omitted and records the true savings exactly once. Affected both the
+  MCP proxy and the gateway.
+- **Dispatcher crash on malformed verb arguments.** A `tools/call` with a
+  bad argument type (e.g. `n: null` → `int(None)`) raised an unhandled
+  exception that killed the MCP proxy's pump loop or returned HTTP 500
+  from the gateway. `Dispatcher.dispatch` now converts any handler
+  exception into a structured `INVALID_ARGS` error.
+- Dashboard `/api/calls?limit=` no longer crashes the request handler on
+  a non-numeric value; it falls back to 100 and clamps the range.
+- **`SavingsTracker` cross-process race.** Multiple proxies sharing one
+  `~/.jmunch/_savings.json` could lose increments — each held only an
+  in-process lock and wrote its own stale in-memory total. `record()` now
+  re-reads the on-disk totals under a cross-process file lock, so
+  concurrent processes accumulate correctly.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed
@@ -113,6 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQLite metrics store.
 - Browser dashboard.
 
+[0.2.1]: https://github.com/jgravelle/jmunch-mcp/releases/tag/v0.2.1
 [0.2.0]: https://github.com/jgravelle/jmunch-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/jgravelle/jmunch-mcp/releases/tag/v0.1.0
 [0.0.3]: https://github.com/jgravelle/jmunch-mcp/releases/tag/v0.0.3

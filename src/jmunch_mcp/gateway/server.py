@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any
 
+from .. import __version__
 from ..meta import SavingsTracker
 from ..metrics import MetricsDB
 from ..persistent_registry import PersistentHandleRegistry
@@ -22,6 +23,26 @@ from .openai_route import handle_chat_completions, stream_chat_completions
 from .upstreams import build as build_upstream
 
 log = logging.getLogger("jmunch.gateway.server")
+
+# Header values recognised as "off" for boolean per-request override headers.
+_FALSEY = ("false", "0", "no", "off")
+
+# Self-identifying response header. Its mere presence lets any downstream
+# tool detect that it is talking to a jmunch gateway (no port heuristics);
+# the value carries the running version.
+_GATEWAY_HEADER = "X-Jmunch-Gateway"
+
+
+def _gw_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Headers stamped on every gateway response."""
+    headers = {_GATEWAY_HEADER: __version__}
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _header_is_false(value: str | None) -> bool:
+    return bool(value) and value.strip().lower() in _FALSEY
 
 
 class GatewayApp:
@@ -68,15 +89,12 @@ def build_aiohttp_app(gateway: GatewayApp):
         try:
             body = await request.json()
         except (ValueError, json.JSONDecodeError):
-            return web.json_response({"error": {"message": "invalid JSON body"}}, status=400)
+            return web.json_response(
+                {"error": {"message": "invalid JSON body"}},
+                status=400, headers=_gw_headers(),
+            )
         header = request.headers.get("X-Jmunch-Upstream")
-        inject_header = request.headers.get("X-Jmunch-Inject")
-        # Per-request inject-override: `X-Jmunch-Inject: false` → never.
-        config = gateway.config
-        if inject_header and inject_header.lower() in ("false", "0", "no"):
-            config_for_call = _with_inject_mode(config, "never")
-        else:
-            config_for_call = config
+        config_for_call = _config_for_request(gateway.config, request.headers)
 
         if body.get("stream"):
             status, chunks = await stream_chat_completions(
@@ -91,11 +109,11 @@ def build_aiohttp_app(gateway: GatewayApp):
             )
             resp = web.StreamResponse(
                 status=status,
-                headers={
+                headers=_gw_headers({
                     "Content-Type": "text/event-stream",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
-                },
+                }),
             )
             await resp.prepare(request)
             for c in chunks:
@@ -114,7 +132,7 @@ def build_aiohttp_app(gateway: GatewayApp):
             metrics=gateway.metrics,
             token_counter=gateway.token_counter,
         )
-        return web.json_response(resp, status=status)
+        return web.json_response(resp, status=status, headers=_gw_headers())
 
     async def anthropic_messages(request):
         try:
@@ -122,13 +140,10 @@ def build_aiohttp_app(gateway: GatewayApp):
         except (ValueError, json.JSONDecodeError):
             return web.json_response(
                 {"type": "error", "error": {"message": "invalid JSON body"}},
-                status=400,
+                status=400, headers=_gw_headers(),
             )
         header = request.headers.get("X-Jmunch-Upstream")
-        inject_header = request.headers.get("X-Jmunch-Inject")
-        config_for_call = gateway.config
-        if inject_header and inject_header.lower() in ("false", "0", "no"):
-            config_for_call = _with_inject_mode(gateway.config, "never")
+        config_for_call = _config_for_request(gateway.config, request.headers)
 
         if body.get("stream"):
             status, chunks = await stream_messages(
@@ -143,11 +158,11 @@ def build_aiohttp_app(gateway: GatewayApp):
             )
             resp = web.StreamResponse(
                 status=status,
-                headers={
+                headers=_gw_headers({
                     "Content-Type": "text/event-stream",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
-                },
+                }),
             )
             await resp.prepare(request)
             for c in chunks:
@@ -166,19 +181,22 @@ def build_aiohttp_app(gateway: GatewayApp):
             metrics=gateway.metrics,
             token_counter=gateway.token_counter,
         )
-        return web.json_response(resp, status=status)
+        return web.json_response(resp, status=status, headers=_gw_headers())
 
     async def models_passthrough(request):
         # Phase 1: return an empty list. Apps that don't call this endpoint
         # (most do not after the first handshake) are unaffected.
-        return web.json_response({"object": "list", "data": []})
+        return web.json_response(
+            {"object": "list", "data": []}, headers=_gw_headers()
+        )
 
     async def health(request):
         return web.json_response({
             "status": "ok",
+            "version": __version__,
             "upstreams": [u.name for u in gateway.config.upstreams],
             "tokens_saved_total": gateway.tracker.total,
-        })
+        }, headers=_gw_headers())
 
     async def _on_startup(_app):
         await gateway.registry.start_sweeper()
@@ -200,6 +218,30 @@ def build_aiohttp_app(gateway: GatewayApp):
 def _with_inject_mode(config: GatewayConfig, mode: str) -> GatewayConfig:
     from dataclasses import replace
     return replace(config, interception=replace(config.interception, inject_tools=mode))
+
+
+def _with_handleify(config: GatewayConfig, enabled: bool) -> GatewayConfig:
+    from dataclasses import replace
+    return replace(
+        config, interception=replace(config.interception, handleify_enabled=enabled)
+    )
+
+
+def _config_for_request(config: GatewayConfig, headers) -> GatewayConfig:
+    """Apply per-request override headers to a copy of the gateway config.
+
+      * `X-Jmunch-Inject: false`    → disable verb tool injection.
+      * `X-Jmunch-Handleify: false` → disable request-side handle-ification,
+        so the upstream receives the raw tool_result content untouched. Pairs
+        with a memory/extraction consumer that needs full fidelity.
+
+    Returns the original config object when no override applies.
+    """
+    if _header_is_false(headers.get("X-Jmunch-Inject")):
+        config = _with_inject_mode(config, "never")
+    if _header_is_false(headers.get("X-Jmunch-Handleify")):
+        config = _with_handleify(config, False)
+    return config
 
 
 def serve(config: GatewayConfig) -> int:

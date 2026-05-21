@@ -73,15 +73,29 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:7879
 What it does, transparently:
 
 - **Handle-ifies fat tool_results** in outgoing requests — your app's tool returns 100KB of JSON, the model sees a 1KB summary + opaque handle.
+- **Context-aware compression** — handle-ification is gated on the request size *relative to the model's context window*. On a big-context model (Qwen3 262k, GPT-4.1 1M) a request that comfortably fits is forwarded verbatim; compression only kicks in once the request approaches a configurable fraction of the window. The most recent N tool_results are always left verbatim — they are the agent's live working set.
 - **Injects jmunch verbs** (`peek`, `slice`, `search`, `aggregate`, `describe`, `summarize`, `list_handles`) into the request's `tools` array so the model can drill in.
 - **Short-circuits verb calls** — when the model calls `jmunch_peek`, the gateway resolves it locally against the handle registry and synthesizes the follow-up turn. The app never sees jmunch tool_calls; those completions cost zero upstream tokens.
 - **Persists handles** to `~/.jmunch/handles.db` with a configurable TTL so they survive restarts and cross-session reads.
 - **Streams both ways** — OpenAI SSE and Anthropic event streams are buffer-then-replayed with correct verb resolution.
 
+### Context-aware compression
+
+Handle-ification is built for chatty servers and small context windows. On a large-context model it can compress context that would have fit fine, and that lossy compression shows up as the agent "forgetting" mid-task. Three `[interception]` knobs scope it down:
+
+- `context_fraction` — only handle-ify a request once its estimated token count reaches this fraction of the model's context window. `0.0` (default) disables the gate and compresses every request — the previous behavior. `0.5` starts compressing at half the window.
+- `recency_window` — never handle-ify the last N tool_results in a request. They are the agent's active working set; compressing them mid-task drops context it needs *now*. Older tool_results are still compressed. `0` (default) disables it.
+- `default_context_window` / `[interception.context_windows]` — the window size assumed per model. Common models (GPT, Claude, Qwen, Llama, Gemini, Mistral, DeepSeek) are recognized by name; the `context_windows` table teaches the gateway about custom or newly released models.
+
+See [`configs/gateway.example.toml`](configs/gateway.example.toml) for a worked example.
+
 Per-request controls via headers:
 
 - `X-Jmunch-Upstream: <name>` — override the configured upstream.
-- `X-Jmunch-Inject: false` — disable tool injection for this call (pure pass-through + request-side handle-ify only).
+- `X-Jmunch-Inject: false` — disable verb tool injection for this call (pure pass-through + request-side handle-ify only).
+- `X-Jmunch-Handleify: false` — disable request-side handle-ification for this call, so the upstream receives raw tool_result content untouched. Pairs with a downstream consumer (e.g. a memory extractor) that needs full-fidelity content.
+
+Every gateway response carries an `X-Jmunch-Gateway: <version>` header — its presence lets any downstream tool detect a jmunch gateway definitively, without port heuristics.
 
 Metrics flow into the same dashboard as the MCP proxy. Filter with `?surface=gateway` or `?surface=mcp` on `/api/stats` and `/api/calls`.
 

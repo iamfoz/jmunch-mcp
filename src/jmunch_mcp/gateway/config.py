@@ -40,6 +40,25 @@ def _default_api_key_env(kind: str) -> str | None:
 class Interception:
     threshold_tokens: int = 2000
     inject_tools: str = "auto"   # "auto" | "always" | "never"
+    # Context-aware gate. When > 0, a request is only eligible for
+    # handle-ification once its estimated size reaches this fraction of the
+    # model's context window. 0.0 disables the gate (every request is
+    # eligible) — the previous behaviour.
+    context_fraction: float = 0.0
+    # Recency window: never handle-ify the last N tool_results in a request.
+    # They are the agent's active working set; compressing them mid-task is
+    # the most direct cause of "forgets what it was doing". 0 disables it.
+    recency_window: int = 0
+    # Context window (tokens) assumed for models not in the built-in table
+    # or `context_windows` map.
+    default_context_window: int = 128_000
+    # Optional model-name → context-window overrides (exact or prefix match).
+    context_windows: dict[str, int] = field(default_factory=dict)
+    # Master switch for request-side handle-ification. Normally True; the
+    # `X-Jmunch-Handleify: false` request header flips it off per-call so a
+    # downstream consumer (e.g. a memory extractor) can pull raw content
+    # through the gateway untouched.
+    handleify_enabled: bool = True
 
 
 @dataclass
@@ -115,12 +134,26 @@ def load(path: str | os.PathLike) -> GatewayConfig:
         raise ValueError(f"{p}: at least one [[upstream]] is required")
 
     inter_raw = data.get("interception") or {}
+    context_windows_raw = inter_raw.get("context_windows") or {}
+    if not isinstance(context_windows_raw, dict):
+        raise ValueError(f"{p}: interception.context_windows must be a table")
     interception = Interception(
         threshold_tokens=int(inter_raw.get("threshold_tokens", 2000)),
         inject_tools=str(inter_raw.get("inject_tools", "auto")),
+        context_fraction=float(inter_raw.get("context_fraction", 0.0)),
+        recency_window=int(inter_raw.get("recency_window", 0)),
+        default_context_window=int(inter_raw.get("default_context_window", 128_000)),
+        context_windows={str(k): int(v) for k, v in context_windows_raw.items()},
+        handleify_enabled=bool(inter_raw.get("handleify", True)),
     )
     if interception.inject_tools not in ("auto", "always", "never"):
         raise ValueError(f"{p}: interception.inject_tools must be auto|always|never")
+    if not 0.0 <= interception.context_fraction <= 1.0:
+        raise ValueError(f"{p}: interception.context_fraction must be between 0.0 and 1.0")
+    if interception.recency_window < 0:
+        raise ValueError(f"{p}: interception.recency_window must be >= 0")
+    if interception.default_context_window <= 0:
+        raise ValueError(f"{p}: interception.default_context_window must be > 0")
 
     handles_raw = data.get("handles") or {}
     handles = HandleStore(

@@ -32,8 +32,8 @@ from ..meta import SavingsTracker, envelope, timer_ms
 from ..metrics import MetricsDB
 from ..registry import HandleRegistry
 from ..verbs import Dispatcher
-from .config import GatewayConfig
-from .handleify import maybe_handleify
+from .config import GatewayConfig, Interception
+from .handleify import maybe_handleify, recency_protected_count, request_is_eligible
 from .tool_injection import (
     inject_into_openai_request,
     is_jmunch_gateway_tool,
@@ -51,10 +51,18 @@ def _handleify_request_messages(
     *,
     registry: HandleRegistry,
     tracker: SavingsTracker,
-    threshold_tokens: int,
+    interception: Interception,
+    request_bytes: int,
 ) -> tuple[dict[str, Any], int, list[tuple[str, str]]]:
-    """Replace any over-threshold `role: "tool"` message content with a jMRI
+    """Replace over-threshold `role: "tool"` message content with a jMRI
     handle envelope.
+
+    Three gates run before any payload is touched:
+      * `handleify_enabled` — master switch (off via `X-Jmunch-Handleify`).
+      * context-aware gate — skip the whole request when it sits well
+        within the model's context window (`context_fraction`).
+      * recency window — never compress the last N tool messages; they are
+        the agent's live working set.
 
     Returns (new_request, bytes_saved, raw_sent_pairs) where raw_sent_pairs
     is a list of (raw_text, envelope_text) for each handle-ified message —
@@ -63,14 +71,29 @@ def _handleify_request_messages(
     messages = req.get("messages")
     if not isinstance(messages, list):
         return req, 0, []
+    if not interception.handleify_enabled:
+        return req, 0, []
+    model = req.get("model")
+    model_s = model if isinstance(model, str) else None
+    if not request_is_eligible(request_bytes, model_s, interception=interception):
+        return req, 0, []
+
+    # Recency window: protect the last N `role: "tool"` messages.
+    tool_idxs = [i for i, m in enumerate(messages)
+                 if isinstance(m, dict) and m.get("role") == "tool"]
+    n_protected = recency_protected_count(len(tool_idxs), interception.recency_window)
+    protected: set[int] = set(tool_idxs[len(tool_idxs) - n_protected:]) if n_protected else set()
 
     new_messages: list[Any] = []
     total_saved = 0
     pairs: list[tuple[str, str]] = []
     mutated = False
 
-    for m in messages:
+    for i, m in enumerate(messages):
         if not (isinstance(m, dict) and m.get("role") == "tool"):
+            new_messages.append(m)
+            continue
+        if i in protected:
             new_messages.append(m)
             continue
         content = m.get("content")
@@ -78,7 +101,8 @@ def _handleify_request_messages(
             new_messages.append(m)
             continue
         out = maybe_handleify(
-            content, registry=registry, tracker=tracker, threshold_tokens=threshold_tokens
+            content, registry=registry, tracker=tracker,
+            threshold_tokens=interception.threshold_tokens,
         )
         if out is None:
             new_messages.append(m)
@@ -425,7 +449,8 @@ async def handle_chat_completions(
         req_body,
         registry=registry,
         tracker=tracker,
-        threshold_tokens=config.interception.threshold_tokens,
+        interception=config.interception,
+        request_bytes=raw_request_bytes,
     )
     prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
@@ -532,7 +557,8 @@ async def stream_chat_completions(
     prepped, saved_on_request, raw_sent_pairs = _handleify_request_messages(
         req_body,
         registry=registry, tracker=tracker,
-        threshold_tokens=config.interception.threshold_tokens,
+        interception=config.interception,
+        request_bytes=raw_request_bytes,
     )
     prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)

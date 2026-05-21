@@ -18,11 +18,47 @@ from typing import Any
 from ..backends.jsontree import JSONBackend
 from ..backends.tabular import TabularBackend
 from ..backends.text import TextBackend
-from ..meta import SavingsTracker, envelope, timer_ms
+from ..meta import BYTES_PER_TOKEN, SavingsTracker, envelope, timer_ms
 from ..registry import HandleRegistry
 from ..sniffer import Kind, classify, extract_rows
+from .config import Interception
+from .context_window import window_for
 
 log = logging.getLogger("jmunch.gateway.handleify")
+
+
+def request_is_eligible(
+    request_bytes: int,
+    model: str | None,
+    *,
+    interception: Interception,
+) -> bool:
+    """Context-aware gate for request-side handle-ification.
+
+    With `context_fraction == 0` (default) every request is eligible — the
+    previous behaviour. When it is set, a request is only handle-ified once
+    its estimated token count reaches that fraction of the model's context
+    window. The point: on a 262k-token model a request that comfortably
+    fits should be forwarded verbatim — compressing it only sheds detail
+    the model still has room to hold.
+    """
+    if interception.context_fraction <= 0.0:
+        return True
+    window = window_for(
+        model,
+        default_window=interception.default_context_window,
+        overrides=interception.context_windows,
+    )
+    request_tokens = request_bytes // BYTES_PER_TOKEN
+    return request_tokens >= interception.context_fraction * window
+
+
+def recency_protected_count(total: int, recency_window: int) -> int:
+    """How many of `total` ordered tool_results sit inside the recency
+    window and must be left verbatim. Clamped to `[0, total]`."""
+    if recency_window <= 0 or total <= 0:
+        return 0
+    return min(recency_window, total)
 
 
 def maybe_handleify(
@@ -99,16 +135,14 @@ def maybe_handleify(
             "tools (aggregate for tabular only, summarize for text only) to drill in."
         ),
     }
+    # response_bytes omitted → the envelope self-measures and records the
+    # true savings (passing 0 would over-credit the tracker by raw_bytes).
     env = envelope(
         result=handle_result,
         raw_bytes=raw_bytes,
-        response_bytes=0,
         tracker=tracker,
         timing_ms=timer_ms(started),
     )
-    env_text = json.dumps(env, default=str)
-    env["_meta"]["response_tokens"] = len(env_text) // 4
-    env["_meta"]["tokens_saved"] = max(0, (raw_bytes - len(env_text)) // 4)
     env_text = json.dumps(env, default=str)
 
     log.info(
