@@ -6,8 +6,10 @@ Cumulative `total_tokens_saved` is persisted to ~/.jmunch/_savings.json.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -42,11 +44,62 @@ def cost_avoided(tokens: int) -> dict[str, float]:
     return {k: round(tokens * price / 1_000_000, 4) for k, price in _MODEL_PRICES_PER_1M.items()}
 
 
+@contextlib.contextmanager
+def _file_lock(lock_path: Path):
+    """Best-effort cross-process exclusive lock.
+
+    Multiple proxy/gateway processes share one `_savings.json`; without a
+    cross-process lock their read-modify-write cycles interleave and one
+    process's increment is silently lost. This serialises them via an OS
+    advisory lock on a sibling `.lock` file. Degrades to a no-op (current
+    behaviour) if OS file locking is unavailable.
+    """
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(lock_path, "a+")
+    except OSError:
+        yield
+        return
+    locked = False
+    try:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            locked = True
+        except (OSError, ImportError):
+            locked = False
+        yield
+    finally:
+        if locked:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
 class SavingsTracker:
-    """Persists cumulative tokens saved across process restarts."""
+    """Persists cumulative tokens saved across process restarts.
+
+    Safe for concurrent processes: each `record()` re-reads the on-disk
+    totals under a cross-process file lock, so two proxies sharing one
+    `_savings.json` cannot lose each other's increments.
+    """
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (Path.home() / ".jmunch" / "_savings.json")
+        self._lock_path = self.path.with_suffix(".lock")
         self._lock = threading.Lock()
         self._total_tokens_saved = 0
         self._total_cost_avoided: dict[str, float] = {k: 0.0 for k in _MODEL_PRICES_PER_1M}
@@ -78,7 +131,12 @@ class SavingsTracker:
         os.replace(tmp, self.path)
 
     def record(self, tokens_saved: int) -> tuple[int, dict[str, float]]:
-        with self._lock:
+        with self._lock, _file_lock(self._lock_path):
+            # Re-read the authoritative on-disk totals inside the lock —
+            # another process may have advanced them since we last loaded.
+            # Without this re-read the read-modify-write races and one
+            # process's increment is silently overwritten.
+            self._load()
             self._total_tokens_saved += tokens_saved
             delta_cost = cost_avoided(tokens_saved)
             for k, v in delta_cost.items():
@@ -91,24 +149,15 @@ class SavingsTracker:
         return self._total_tokens_saved
 
 
-def envelope(
+def _meta_block(
     *,
-    result: Any = None,
-    error: dict[str, Any] | None = None,
-    raw_bytes: int,
+    tokens_saved: int,
     response_bytes: int,
-    tracker: SavingsTracker,
-    timing_ms: float | None = None,
+    raw_bytes: int,
+    total_saved: int,
+    total_cost: dict[str, float],
+    timing_ms: float | None,
 ) -> dict[str, Any]:
-    """Wrap a result or error in the jMRI response envelope.
-
-    `raw_bytes` is the original upstream payload size; `response_bytes` is the
-    compact response we're about to emit. For pure passthrough responses, pass
-    equal values — savings will be zero.
-    """
-    tokens_saved = estimate_savings(raw_bytes, response_bytes)
-    total_saved, total_cost = tracker.record(tokens_saved)
-
     meta: dict[str, Any] = {
         "tokens_saved": tokens_saved,
         "total_tokens_saved": total_saved,
@@ -123,13 +172,72 @@ def envelope(
     }
     if timing_ms is not None:
         meta["timing_ms"] = round(timing_ms, 2)
+    return meta
 
+
+def _wrap(result: Any, error: dict[str, Any] | None, meta: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {"_meta": meta}
     if error is not None:
         out["error"] = error
     else:
         out["result"] = result
     return out
+
+
+def envelope(
+    *,
+    result: Any = None,
+    error: dict[str, Any] | None = None,
+    raw_bytes: int,
+    response_bytes: int | None = None,
+    tracker: SavingsTracker,
+    timing_ms: float | None = None,
+) -> dict[str, Any]:
+    """Wrap a result or error in the jMRI response envelope.
+
+    `raw_bytes` is the original upstream payload size. `response_bytes` is the
+    compact response being emitted; pass it when the size is already known
+    (passthrough / error envelopes).
+
+    Leave `response_bytes` as None for handle-ification, where the compact
+    response *is* this envelope and its size isn't known until it exists. In
+    that case the envelope measures its own serialized length and records the
+    true savings to the tracker exactly once — passing `response_bytes=0`
+    here would credit the tracker with `raw_bytes` of savings it never made.
+    """
+    if response_bytes is None:
+        # Draft with worst-case (response_bytes=0) numbers to size the
+        # structure, then record the true savings against the measured size.
+        draft = _wrap(result, error, _meta_block(
+            tokens_saved=estimate_savings(raw_bytes, 0),
+            response_bytes=0,
+            raw_bytes=raw_bytes,
+            total_saved=tracker.total,
+            total_cost={k: 0.0 for k in _MODEL_PRICES_PER_1M},
+            timing_ms=timing_ms,
+        ))
+        measured = len(json.dumps(draft, default=str))
+        tokens_saved = estimate_savings(raw_bytes, measured)
+        total_saved, total_cost = tracker.record(tokens_saved)
+        return _wrap(result, error, _meta_block(
+            tokens_saved=tokens_saved,
+            response_bytes=measured,
+            raw_bytes=raw_bytes,
+            total_saved=total_saved,
+            total_cost=total_cost,
+            timing_ms=timing_ms,
+        ))
+
+    tokens_saved = estimate_savings(raw_bytes, response_bytes)
+    total_saved, total_cost = tracker.record(tokens_saved)
+    return _wrap(result, error, _meta_block(
+        tokens_saved=tokens_saved,
+        response_bytes=response_bytes,
+        raw_bytes=raw_bytes,
+        total_saved=total_saved,
+        total_cost=total_cost,
+        timing_ms=timing_ms,
+    ))
 
 
 def timer_ms(start_ns: int) -> float:

@@ -67,6 +67,19 @@ def test_api_calls_tail(seeded_db):
         server.shutdown()
 
 
+def test_api_calls_bad_limit_does_not_crash(seeded_db):
+    """A non-numeric ?limit= must fall back, not 500 the handler."""
+    server = _run_server("127.0.0.1", 0, seeded_db)
+    port = server.server_address[1]
+    try:
+        status, body, _ = _get(f"http://127.0.0.1:{port}/api/calls?limit=abc")
+        assert status == 200
+        rows = json.loads(body)
+        assert len(rows) == 2
+    finally:
+        server.shutdown()
+
+
 def test_api_servers_tags_own_suite(monkeypatch, tmp_path):
     from jmunch_mcp.cli.discovery import Candidate
 

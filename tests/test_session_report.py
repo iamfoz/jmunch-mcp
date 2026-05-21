@@ -80,7 +80,9 @@ def test_session_tokens_saved_is_delta(tmp_path):
     p.stats.tokens_saved_at_start = p.tracker.total  # 5000
 
     p._pending[2] = "tools/call"
-    rows = [{"id": i, "name": f"user_{i}"} for i in range(30)]
+    # A genuinely fat payload — the handle envelope must be much smaller than
+    # the raw rows for there to be real savings to measure.
+    rows = [{"id": i, "name": f"user_{i}", "bio": "x" * 100} for i in range(200)]
     p._maybe_rewrite_response(_tool_call(json.dumps(rows)))
     p.stats.finalize(p.tracker.total)
 

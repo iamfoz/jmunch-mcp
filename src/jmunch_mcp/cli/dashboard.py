@@ -389,7 +389,11 @@ def _make_handler(db_path: Path):
                 return
 
             if path == "/api/calls":
-                limit = int(qs.get("limit", ["100"])[0])
+                try:
+                    limit = int(qs.get("limit", ["100"])[0])
+                except (ValueError, TypeError):
+                    limit = 100
+                limit = max(1, min(limit, 100_000))
                 self._send_json(_calls_payload(db_path, limit, surface=surface))
                 return
 
