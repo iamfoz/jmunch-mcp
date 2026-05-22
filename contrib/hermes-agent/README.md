@@ -46,6 +46,7 @@ Both scripts read these environment variables (all optional):
 |---|---|---|
 | `JMUNCH_REPO` | `https://github.com/iamfoz/jmunch-mcp.git` | repository to install from |
 | `JMUNCH_BRANCH` | `deploy` | branch to install |
+| `JMUNCH_EXTRAS` | `gateway,setup` | optional-deps to install (e.g. `gateway` to skip the Textual wizard) |
 | `JMUNCH_LABEL` | `sh.jmunch.gateway` | gateway service label (`update-jmunch.sh` only) |
 
 ## Does Hermes need jmunch in its own environment?
