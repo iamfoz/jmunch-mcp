@@ -100,6 +100,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_meta.py` pins both rates as restated literals plus a
   `cost_avoided()` round-trip, so the next drift fails the suite instead of
   shipping.
+## [Unreleased]
+
+### Added
+- **`jmunch-mcp gateway install` — run the gateway as a background
+  service.** New `gateway` sub-verbs `install` / `start` / `stop` /
+  `restart` / `status` / `uninstall` generate and manage a user-level
+  service: a launchd agent on macOS, a systemd user unit on Linux. The
+  service runs the same interpreter that ran `install`, restarts on
+  failure, and logs to `~/.jmunch/logs/`. `--label` allows multiple
+  instances. Agent-agnostic; unsupported platforms fall back to the
+  foreground `gateway` run with a clear message. The generated unit
+  declares `JMUNCH_DEBUG_DUMP=0` in the service environment;
+  `install --debug-dump` sets it to `1`.
+- `contrib/` — optional, clearly-fenced integration helpers that are not
+  part of the core package and not shipped in the wheel. `contrib/hermes-agent/`
+  ships a safe gateway update/restart script for Hermes-agent users.
 
 ## [0.2.1] — 2026-04-30
 
