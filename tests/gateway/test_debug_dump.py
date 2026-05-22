@@ -156,11 +156,13 @@ def test_openai_route_dumps_first_and_verb_loop(tmp_path, monkeypatch):
     names = [d.name for d in dumps]
     assert any(n.endswith("_openai_first.json") for n in names)
     assert any(n.endswith("_openai_verb-loop.json") for n in names)
-    # The "first" dump is the real forwarded body: model + verb tools injected.
+    # The "first" dump is the real forwarded body. No handle envelope is
+    # present on this turn, so envelope-aware `auto` does not inject the
+    # jmunch verbs — only the app's own tool is forwarded.
     first = json.loads(next(d for d in dumps if d.name.endswith("_openai_first.json")).read_text())
     assert first["model"] == "gpt-4"
     tool_names = [t["function"]["name"] for t in first["tools"]]
-    assert "app_tool" in tool_names and "jmunch_peek" in tool_names
+    assert "app_tool" in tool_names
 
 
 def test_anthropic_route_dumps_first_turn(tmp_path, monkeypatch):
