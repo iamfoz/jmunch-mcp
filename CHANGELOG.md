@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gateway: `X-Jmunch-Gateway` response header** on every response —
+  streaming and non-streaming, both routes, plus `/health`, `/v1/models`
+  and error responses. Lets a downstream consumer passively detect that
+  jmunch is in the LLM path; the value carries the gateway version.
+- **Gateway: `X-Jmunch-Handleify` request header.** `X-Jmunch-Handleify:
+  false` (or `0`/`no`) disables request-side handle-ification for that
+  one call, so a memory-extraction call sees full-fidelity tool content.
+  A per-request config override, parallel to `X-Jmunch-Inject`.
+
+### Fixed
+- **Gateway: model no longer mistakes a handle envelope for a
+  user-attached file.** A static system instruction explaining handle
+  envelopes is now injected into every forwarded request whenever verb
+  injection is active — not just during the internal verb loop. Without
+  it, a leftover handle envelope in conversation history made the model
+  narrate "a file or data payload has been attached" instead of treating
+  it as compressed tool output.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed

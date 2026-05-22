@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any
 
+from .. import __version__
 from ..meta import SavingsTracker
 from ..metrics import MetricsDB
 from ..persistent_registry import PersistentHandleRegistry
@@ -22,6 +23,33 @@ from .openai_route import handle_chat_completions, stream_chat_completions
 from .upstreams import build as build_upstream
 
 log = logging.getLogger("jmunch.gateway.server")
+
+# Header values treated as "off" for boolean per-request override headers.
+_FALSEY = ("false", "0", "no")
+
+# Self-identifying response header. A downstream consumer checks only for its
+# presence (to detect that jmunch is in the LLM path); the value carries the
+# running gateway version.
+_GATEWAY_HEADER = "X-Jmunch-Gateway"
+
+# `X-Jmunch-Handleify: false` raises the handle-ification threshold to this
+# effectively-infinite value for one request, so every payload falls under it
+# and is forwarded verbatim — without mutating global config.
+_HANDLEIFY_OFF_THRESHOLD = 1 << 60
+
+
+def _gw_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Headers for a streaming response: the self-identifying gateway header
+    plus the passed SSE extras. Non-streaming responses get the gateway
+    header from the `_stamp_gateway_header` middleware instead."""
+    headers = {_GATEWAY_HEADER: __version__}
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _header_is_false(value: str | None) -> bool:
+    return bool(value) and value.strip().lower() in _FALSEY
 
 
 class GatewayApp:
@@ -61,7 +89,25 @@ def build_aiohttp_app(gateway: GatewayApp):
             "Install with: pip install 'jmunch-mcp[gateway]'"
         ) from e
 
-    app = web.Application(client_max_size=64 * 1024 * 1024)  # 64 MB request cap
+    @web.middleware
+    async def _stamp_gateway_header(request, handler):
+        """Stamp `X-Jmunch-Gateway` on every response. Streaming responses set
+        it inline (their headers are already flushed by the time middleware
+        runs); this covers every non-streaming response, including errors and
+        router 404s."""
+        try:
+            resp = await handler(request)
+        except web.HTTPException as exc:
+            exc.headers[_GATEWAY_HEADER] = __version__
+            raise
+        if not resp.prepared:
+            resp.headers[_GATEWAY_HEADER] = __version__
+        return resp
+
+    app = web.Application(
+        client_max_size=64 * 1024 * 1024,  # 64 MB request cap
+        middlewares=[_stamp_gateway_header],
+    )
     app["jmunch"] = gateway
 
     async def openai_chat(request):
@@ -70,13 +116,7 @@ def build_aiohttp_app(gateway: GatewayApp):
         except (ValueError, json.JSONDecodeError):
             return web.json_response({"error": {"message": "invalid JSON body"}}, status=400)
         header = request.headers.get("X-Jmunch-Upstream")
-        inject_header = request.headers.get("X-Jmunch-Inject")
-        # Per-request inject-override: `X-Jmunch-Inject: false` → never.
-        config = gateway.config
-        if inject_header and inject_header.lower() in ("false", "0", "no"):
-            config_for_call = _with_inject_mode(config, "never")
-        else:
-            config_for_call = config
+        config_for_call = _config_for_request(gateway.config, request.headers)
 
         if body.get("stream"):
             status, chunks = await stream_chat_completions(
@@ -91,11 +131,11 @@ def build_aiohttp_app(gateway: GatewayApp):
             )
             resp = web.StreamResponse(
                 status=status,
-                headers={
+                headers=_gw_headers({
                     "Content-Type": "text/event-stream",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
-                },
+                }),
             )
             await resp.prepare(request)
             for c in chunks:
@@ -125,10 +165,7 @@ def build_aiohttp_app(gateway: GatewayApp):
                 status=400,
             )
         header = request.headers.get("X-Jmunch-Upstream")
-        inject_header = request.headers.get("X-Jmunch-Inject")
-        config_for_call = gateway.config
-        if inject_header and inject_header.lower() in ("false", "0", "no"):
-            config_for_call = _with_inject_mode(gateway.config, "never")
+        config_for_call = _config_for_request(gateway.config, request.headers)
 
         if body.get("stream"):
             status, chunks = await stream_messages(
@@ -143,11 +180,11 @@ def build_aiohttp_app(gateway: GatewayApp):
             )
             resp = web.StreamResponse(
                 status=status,
-                headers={
+                headers=_gw_headers({
                     "Content-Type": "text/event-stream",
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
-                },
+                }),
             )
             await resp.prepare(request)
             for c in chunks:
@@ -200,6 +237,31 @@ def build_aiohttp_app(gateway: GatewayApp):
 def _with_inject_mode(config: GatewayConfig, mode: str) -> GatewayConfig:
     from dataclasses import replace
     return replace(config, interception=replace(config.interception, inject_tools=mode))
+
+
+def _with_handleify_disabled(config: GatewayConfig) -> GatewayConfig:
+    """Per-request override: raise the handle-ification threshold so high that
+    every payload falls under it — handle-ification becomes a no-op for this
+    request, leaving global config untouched."""
+    from dataclasses import replace
+    return replace(config, interception=replace(
+        config.interception, threshold_tokens=_HANDLEIFY_OFF_THRESHOLD))
+
+
+def _config_for_request(config: GatewayConfig, headers) -> GatewayConfig:
+    """Apply per-request override headers to a copy of the gateway config.
+
+      * `X-Jmunch-Inject: false`    → disable verb tool injection.
+      * `X-Jmunch-Handleify: false` → disable request-side handle-ification,
+        so the upstream receives raw, full-fidelity tool content.
+
+    Returns the original config object when no override applies.
+    """
+    if _header_is_false(headers.get("X-Jmunch-Inject")):
+        config = _with_inject_mode(config, "never")
+    if _header_is_false(headers.get("X-Jmunch-Handleify")):
+        config = _with_handleify_disabled(config)
+    return config
 
 
 def serve(config: GatewayConfig) -> int:
