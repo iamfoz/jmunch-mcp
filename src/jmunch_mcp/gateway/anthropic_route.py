@@ -29,6 +29,7 @@ from .anthropic_sse import (
     parse_anthropic_sse,
 )
 from .config import GatewayConfig
+from .debug_dump import dump_upstream_request
 from .handleify import maybe_handleify
 from .tool_injection import (
     inject_into_anthropic_request,
@@ -214,6 +215,7 @@ async def _verb_loop(
         working["messages"] = working_messages
 
         try:
+            dump_upstream_request(working, route="anthropic", phase="verb-loop")
             response = await upstream.complete(working)
         except UpstreamError as e:
             return e
@@ -261,6 +263,7 @@ async def handle_messages(
     working = copy.deepcopy(prepped)
     try:
         try:
+            dump_upstream_request(working, route="anthropic", phase="first")
             first = await upstream.complete(working)
         except UpstreamError as e:
             err = make_error(UPSTREAM_ERROR, f"upstream {spec.name} returned {e.status}",
@@ -343,6 +346,7 @@ async def stream_messages(
     working = copy.deepcopy(prepped)
     try:
         try:
+            dump_upstream_request(working, route="anthropic", phase="first-stream")
             events = await parse_anthropic_sse(upstream.stream(working))
         except UpstreamError as e:
             err = make_error(UPSTREAM_ERROR, f"upstream {spec.name} returned {e.status}",
