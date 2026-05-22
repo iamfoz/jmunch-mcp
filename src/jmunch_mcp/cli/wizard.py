@@ -100,6 +100,71 @@ def _write_gateway_toml(path: Path, data: dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------
+# upstream connection test (also called from the Textual UI)
+# --------------------------------------------------------------------------
+
+def _test_upstream(base_url: str, kind: str, api_key: str) -> tuple[bool, str]:
+    """GET <base_url>/v1/models with the auth scheme for `kind` and report.
+
+    Returns (ok, message). Designed to work with anything OpenAI- or
+    Anthropic-shaped, including local servers (Ollama, LM Studio, vLLM):
+    those return 200 with no auth, so leaving `api_key` empty is fine.
+
+    Uses only the stdlib (`urllib.request`) — no extra dependency."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return False, "base URL is required"
+
+    headers: dict[str, str] = {"User-Agent": "jmunch-mcp/setup-wizard"}
+    if kind == "anthropic":
+        url = f"{base}/v1/models"
+        if api_key:
+            headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+    elif kind == "openai":
+        url = f"{base}/v1/models"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        return False, f"unknown upstream kind: {kind!r}"
+
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status = resp.status
+            body = resp.read()
+    except urllib.error.HTTPError as e:
+        try:
+            snippet = e.read().decode("utf-8", errors="replace").strip()[:160]
+        except Exception:
+            snippet = ""
+        if e.code in (401, 403):
+            return False, (
+                f"{e.code} {e.reason} — the API key was rejected"
+                if api_key else
+                f"{e.code} {e.reason} — this upstream requires an API key"
+            )
+        return False, f"HTTP {e.code} {e.reason}: {snippet}".strip(": ").strip()
+    except urllib.error.URLError as e:
+        return False, f"could not reach {url}: {e.reason}"
+    except Exception as e:
+        return False, f"unexpected error: {e}"
+
+    try:
+        data = json.loads(body)
+        count = len(data.get("data") or [])
+        return True, (
+            f"OK ({status}) — {count} model{'s' if count != 1 else ''} reported"
+        )
+    except Exception:
+        return True, f"OK ({status}) — non-JSON response"
+
+
+# --------------------------------------------------------------------------
 # verbs
 # --------------------------------------------------------------------------
 

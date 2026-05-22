@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kind / base URL / masked API key), default upstream, inject-tools mode,
   and threshold; writes `~/.jmunch/gateway.toml` plus `~/.jmunch/env`
   (mode `0600`); optionally calls `install` to register the service.
-  Textual ships as a new optional extra `[setup]` (`pipx install
-  'jmunch-mcp[gateway,setup]'` or `pipx inject jmunch-mcp textual`). When
-  the extra is absent, the wizard prints a friendly install hint and
-  exits — the non-interactive `init` / `install` path still works.
+  The upstream dialog has a **Test** button that probes the upstream's
+  `/v1/models` endpoint with the supplied API key — uses OpenAI's
+  `Authorization: Bearer` or Anthropic's `x-api-key` header per the
+  configured kind, works with local servers (Ollama / LM Studio / vLLM)
+  without a key. Add / Edit / Remove buttons manage upstreams in the
+  main wizard. Textual ships as a new optional extra `[setup]` (`pipx
+  install 'jmunch-mcp[gateway,setup]'` or `pipx inject jmunch-mcp
+  textual`). When the extra is absent, the wizard prints a friendly
+  install hint and exits — the non-interactive `init` / `install` path
+  still works.
 - **`gateway add-upstream` (interactive Textual modal) and
   `gateway remove-upstream --name <n>` (non-interactive)** — manage
   upstreams without re-running `setup`. `remove-upstream` auto-updates

@@ -102,7 +102,7 @@ The interactive way (needs the `[setup]` extra for the Textual TUI):
 jmunch-mcp gateway setup
 ```
 
-That walks you through: a listen address, one-or-more upstreams (name / kind / base URL / API key — entered in a masked field), the default upstream, the inject-tools mode, and the threshold. It writes `~/.jmunch/gateway.toml` and `~/.jmunch/env` (the latter holds your API keys, mode `0600`), then offers to install the launchd / systemd service. After that you have a running gateway and you can carry on.
+That walks you through: a listen address, one-or-more upstreams (name / kind / base URL / API key — entered in a masked field), the default upstream, the inject-tools mode, and the threshold. The upstream dialog has a **Test** button that probes `/v1/models` on the upstream with the API key — handy for catching typos before you save. It writes `~/.jmunch/gateway.toml` and `~/.jmunch/env` (the latter holds your API keys, mode `0600`), then offers to install the launchd / systemd service. After that you have a running gateway and you can carry on.
 
 Manage upstreams later:
 
