@@ -4,7 +4,13 @@ Default (no subcommand): run the proxy.
     jmunch-mcp --config path/to/config.toml [--report]
 
 Subcommands:
-    jmunch-mcp init  [...]   Scan + generate wrapper configs for upstreams.
+    jmunch-mcp init  [...]            Scan + generate wrapper configs.
+    jmunch-mcp dashboard [...]        Local metrics web UI.
+    jmunch-mcp gateway --config ...   Run the HTTP gateway (foreground).
+    jmunch-mcp gateway install|start|stop|restart|status|uninstall
+                                      Manage the gateway as a background
+                                      service (launchd on macOS, systemd
+                                      user unit on Linux).
 """
 from __future__ import annotations
 
@@ -43,6 +49,12 @@ def _run_serve(args: argparse.Namespace) -> int:
 
 
 def _run_gateway(argv: list[str]) -> int:
+    from .cli.service import SERVICE_VERBS
+
+    if argv and argv[0] in SERVICE_VERBS:
+        from .cli.service import main as service_main
+        return service_main(argv[0], argv[1:])
+
     parser = argparse.ArgumentParser(prog="jmunch-mcp gateway")
     parser.add_argument("--config", required=True, help="Path to gateway.toml")
     parser.add_argument("--log-level", default=None, help="Override config log_level")

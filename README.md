@@ -85,6 +85,21 @@ Per-request controls via headers:
 
 Metrics flow into the same dashboard as the MCP proxy. Filter with `?surface=gateway` or `?surface=mcp` on `/api/stats` and `/api/calls`.
 
+### Run the gateway as a background service
+
+`jmunch-mcp gateway --config ...` runs in the foreground. To keep the gateway running across logins and restart it on failure, install it as a user-level service:
+
+```bash
+jmunch-mcp gateway install --config ~/.jmunch/gateway.toml
+jmunch-mcp gateway status
+jmunch-mcp gateway restart
+jmunch-mcp gateway uninstall
+```
+
+On macOS this generates a launchd agent (`~/Library/LaunchAgents/sh.jmunch.gateway.plist`); on Linux, a systemd user unit (`~/.config/systemd/user/sh.jmunch.gateway.service`). The service runs the same interpreter that ran `install`, and logs to `~/.jmunch/logs/`. `start` / `stop` / `restart` / `status` manage it afterwards; `uninstall` unloads and removes it. Use `--label` to run more than one instance.
+
+The generated unit declares `JMUNCH_DEBUG_DUMP=0` in the service environment (debug dumps off). Pass `--debug-dump` to `install` to set it to `1`.
+
 ## Dashboard
 
 A read-only local web UI over the metrics DB each proxy writes to. Shows cumulative totals, per-upstream breakdowns, and a time series of forwarded calls.
