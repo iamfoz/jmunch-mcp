@@ -7,6 +7,7 @@ Subcommands:
     jmunch-mcp init  [...]            Scan + generate wrapper configs.
     jmunch-mcp dashboard [...]        Local metrics web UI.
     jmunch-mcp gateway --config ...   Run the HTTP gateway (foreground).
+    jmunch-mcp gateway init           Write a starter ~/.jmunch/gateway.toml.
     jmunch-mcp gateway install|start|stop|restart|status|uninstall
                                       Manage the gateway as a background
                                       service (launchd on macOS, systemd
@@ -49,9 +50,9 @@ def _run_serve(args: argparse.Namespace) -> int:
 
 
 def _run_gateway(argv: list[str]) -> int:
-    from .cli.service import SERVICE_VERBS
+    from .cli.service import GATEWAY_VERBS
 
-    if argv and argv[0] in SERVICE_VERBS:
+    if argv and argv[0] in GATEWAY_VERBS:
         from .cli.service import main as service_main
         return service_main(argv[0], argv[1:])
 

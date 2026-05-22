@@ -90,4 +90,45 @@ def test_main_install_rejects_missing_config(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(service.sys, "platform", "linux")
     rc = service.main("install", ["--config", str(tmp_path / "nope.toml")])
     assert rc == 2
-    assert "config not found" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "no gateway config" in err
+    assert "gateway init" in err
+
+
+def test_init_writes_a_loadable_config(tmp_path):
+    from jmunch_mcp.gateway.config import load
+
+    dest = tmp_path / "gateway.toml"
+    rc = service.main("init", ["--config", str(dest)])
+    assert rc == 0
+    assert dest.is_file()
+    # the generated template must itself be a valid gateway config
+    cfg = load(dest)
+    assert cfg.upstreams and cfg.upstreams[0].kind == "openai"
+    assert cfg.interception.inject_tools == "auto"
+
+
+def test_init_does_not_overwrite_without_force(tmp_path, capsys):
+    dest = tmp_path / "gateway.toml"
+    dest.write_text("custom = true\n", encoding="utf-8")
+    rc = service.main("init", ["--config", str(dest)])
+    assert rc == 0
+    assert dest.read_text() == "custom = true\n"  # untouched
+    assert "already exists" in capsys.readouterr().out
+
+
+def test_init_force_overwrites(tmp_path):
+    dest = tmp_path / "gateway.toml"
+    dest.write_text("custom = true\n", encoding="utf-8")
+    rc = service.main("init", ["--config", str(dest), "--force"])
+    assert rc == 0
+    assert "[[upstream]]" in dest.read_text()
+
+
+def test_install_defaults_to_jmunch_home_config(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(service.sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # no --config, and ~/.jmunch/gateway.toml is absent → error pointing at init
+    rc = service.main("install", [])
+    assert rc == 2
+    assert "gateway init" in capsys.readouterr().err

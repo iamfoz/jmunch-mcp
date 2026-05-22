@@ -3,52 +3,59 @@
 Optional helpers for running the jmunch gateway alongside the Hermes
 agent. Not part of the core `jmunch-mcp` package — see [`../README.md`](../README.md).
 
-## `update-jmunch.sh`
+The Hermes agent reaches jmunch through the **gateway**: point Hermes'
+`OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` at it. Nothing is installed inside
+the Hermes environment — the gateway does all the work. These scripts just
+install the gateway itself and keep it current.
 
-Updates the gateway to the latest `deploy` branch and restarts the
-service. A safe replacement for ad-hoc `pip install -e /tmp/...`: the
-checkout lives at a **stable** path (`~/.jmunch/src/jmunch-mcp` by
-default), so the launchd / systemd gateway service never breaks when
-`/tmp` is purged.
+## `bootstrap-macos.sh` — first-time setup
+
+One-shot macOS install. It installs jmunch-mcp with
+[pipx](https://pipx.pypa.io) — its own isolated venv on a modern Python,
+which sidesteps the locked-down macOS system Python — then scaffolds
+`~/.jmunch/gateway.toml` and registers the launchd service.
+
+```
+contrib/hermes-agent/bootstrap-macos.sh
+```
+
+Homebrew must already be installed (the script won't install it — that
+needs sudo). On a fresh machine it installs pipx via brew, `pipx install`s
+the deploy build, runs `jmunch-mcp gateway init`, and stops so you can
+fill in the `[[upstream]]` block of `~/.jmunch/gateway.toml`. Run
+`jmunch-mcp gateway install` once you have. Re-running the script with the
+config already in place installs/refreshes the service.
+
+## `update-jmunch.sh` — update an existing install
+
+Reinstalls jmunch-mcp from the latest `deploy` build and restarts the
+gateway service:
 
 ```
 contrib/hermes-agent/update-jmunch.sh
 ```
 
-Configure with environment variables (all optional):
+pipx keeps the app in a venv at a stable path, so the service never breaks
+across updates — a safe replacement for ad-hoc `pip install -e /tmp/...`.
+
+## Settings
+
+Both scripts read these environment variables (all optional):
 
 | variable | default | meaning |
 |---|---|---|
-| `JMUNCH_REPO` | `https://github.com/iamfoz/jmunch-mcp.git` | repository to pull |
-| `JMUNCH_BRANCH` | `deploy` | branch to track |
-| `JMUNCH_SRC` | `~/.jmunch/src/jmunch-mcp` | stable checkout path |
-| `JMUNCH_VENV` | `~/.jmunch/venv` | gateway venv |
-| `JMUNCH_LABEL` | `sh.jmunch.gateway` | gateway service label |
-| `HERMES_VENV` | _(unset)_ | if set, also install the **base** package here |
+| `JMUNCH_REPO` | `https://github.com/iamfoz/jmunch-mcp.git` | repository to install from |
+| `JMUNCH_BRANCH` | `deploy` | branch to install |
+| `JMUNCH_LABEL` | `sh.jmunch.gateway` | gateway service label (`update-jmunch.sh` only) |
 
-## Does Hermes need jmunch in its own venv?
+## Does Hermes need jmunch in its own environment?
 
-Usually **no**. If Hermes reaches the gateway over HTTP — `OPENAI_BASE_URL`
-/ `ANTHROPIC_BASE_URL` pointed at it — it imports nothing from jmunch. The
-`jmunch_*` verbs are injected and resolved entirely inside the gateway, so
-the gateway venv is the only one that needs the package.
+**No** — as long as Hermes reaches the gateway over HTTP. The `jmunch_*`
+verbs are injected and resolved entirely inside the gateway; Hermes
+imports nothing from jmunch.
 
-The **only** case where Hermes needs it installed is if Hermes spawns
-`jmunch-mcp` as a stdio **MCP server** in its own config. If so, set
-`HERMES_VENV` — the script installs the **base** package only. The
-`[gateway]` extra is just `aiohttp` for the HTTP server and is never
-needed for the stdio MCP proxy.
-
-## First-time setup
-
-`update-jmunch.sh` expects the gateway venv and the service to exist
-already. Bootstrap them once:
-
-```
-python3 -m venv ~/.jmunch/venv
-JMUNCH_SRC=~/.jmunch/src/jmunch-mcp ./update-jmunch.sh   # clones + installs; restart will warn
-~/.jmunch/venv/bin/jmunch-mcp gateway install --config ~/.jmunch/gateway.toml
-```
-
-After that, re-run `update-jmunch.sh` whenever you want the running
-gateway moved to the latest `deploy`.
+The only exception is if Hermes spawns `jmunch-mcp` as a stdio **MCP
+server** in its own config — a different mode entirely (see the two modes
+in [`../../README.md`](../../README.md)). In that case install the **base**
+package into Hermes' own environment separately — `pipx install jmunch-mcp`,
+no `[gateway]` extra needed.
