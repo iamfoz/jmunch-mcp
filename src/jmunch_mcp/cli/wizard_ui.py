@@ -17,7 +17,7 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -57,12 +57,14 @@ class UpstreamModal(ModalScreen[dict | None]):
         background: $panel;
         padding: 1 2;
         width: 64;
-        height: auto;
+        max-height: 90%;
         border: thick $primary;
     }
     UpstreamModal Input, UpstreamModal Select {
         margin-bottom: 1;
     }
+    UpstreamModal Horizontal { height: 3; }
+    UpstreamModal Button { margin-right: 1; min-width: 12; }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -92,8 +94,8 @@ class UpstreamModal(ModalScreen[dict | None]):
             Label("API key (stored in ~/.jmunch/env, mode 0600; blank to skip)"),
             Input(password=True, id="api_key"),
             Horizontal(
-                Button("Save", id="save", variant="primary"),
-                Button("Cancel", id="cancel"),
+                Button(label="Save", id="save", variant="success"),
+                Button(label="Cancel", id="cancel", variant="error"),
             ),
         )
 
@@ -144,9 +146,12 @@ class SetupApp(App):
 
     DEFAULT_CSS = """
     #form { padding: 1 2; }
-    #upstream_table { height: 8; margin-bottom: 1; }
+    #upstream_table { height: 7; margin-bottom: 1; }
     Input, Select { margin-bottom: 1; }
-    .section { color: $accent; margin-top: 1; }
+    .section { color: $accent; margin-top: 1; text-style: bold; }
+    .hint { color: $text-muted; margin-bottom: 1; }
+    .actions { height: 3; margin-bottom: 1; }
+    .actions Button { margin-right: 1; min-width: 18; }
     """
 
     def __init__(self, existing: dict[str, Any] | None = None) -> None:
@@ -161,15 +166,21 @@ class SetupApp(App):
         yield Header()
         gw = self._existing.get("gateway") or {}
         inter = self._existing.get("interception") or {}
-        yield Vertical(
+        yield VerticalScroll(
             Label("Listen address", classes="section"),
             Input(value=gw.get("listen", "127.0.0.1:7879"), id="listen"),
 
             Label("Upstreams  —  one per provider", classes="section"),
+            Label(
+                "Click 'Add upstream' to add a provider — its dialog has the "
+                "masked API-key field.",
+                classes="hint",
+            ),
             DataTable(id="upstream_table", cursor_type="row"),
             Horizontal(
-                Button("Add upstream", id="add"),
-                Button("Remove selected", id="remove"),
+                Button(label="Add upstream", id="add", variant="primary"),
+                Button(label="Remove selected", id="remove"),
+                classes="actions",
             ),
 
             Label("Default upstream", classes="section"),
@@ -190,8 +201,9 @@ class SetupApp(App):
             Input(value=str(inter.get("threshold_tokens", 2000)), id="threshold"),
 
             Horizontal(
-                Button("Save", id="save", variant="primary"),
-                Button("Cancel", id="cancel", variant="error"),
+                Button(label="Save", id="save", variant="success"),
+                Button(label="Cancel", id="cancel", variant="error"),
+                classes="actions",
             ),
             id="form",
         )
