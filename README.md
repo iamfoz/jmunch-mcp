@@ -26,6 +26,13 @@ Tabular content (GitHub) routes to the SQLite backend and answers `peek`/`slice`
 pip install jmunch-mcp
 ```
 
+To install it as a standalone command-line tool — recommended on macOS, where the system Python is locked down — use [pipx](https://pipx.pypa.io). It puts `jmunch-mcp` on your PATH in its own isolated environment, built with a modern Python:
+
+```bash
+brew install pipx && pipx ensurepath
+pipx install 'jmunch-mcp[gateway]'
+```
+
 From source:
 
 ```bash
@@ -87,14 +94,17 @@ Metrics flow into the same dashboard as the MCP proxy. Filter with `?surface=gat
 
 ### Run the gateway as a background service
 
-`jmunch-mcp gateway --config ...` runs in the foreground. To keep the gateway running across logins and restart it on failure, install it as a user-level service:
+`jmunch-mcp gateway --config ...` runs in the foreground. To keep the gateway running across logins and restart it on failure, scaffold a config and install it as a user-level service:
 
 ```bash
-jmunch-mcp gateway install --config ~/.jmunch/gateway.toml
+jmunch-mcp gateway init        # writes a starter ~/.jmunch/gateway.toml — edit it
+jmunch-mcp gateway install     # installs the service
 jmunch-mcp gateway status
 jmunch-mcp gateway restart
 jmunch-mcp gateway uninstall
 ```
+
+`init` writes a commented starter config to `~/.jmunch/gateway.toml`; edit the `[[upstream]]` block to point at your provider. `install` defaults to that path — pass `--config <path>` to use another.
 
 On macOS this generates a launchd agent (`~/Library/LaunchAgents/sh.jmunch.gateway.plist`); on Linux, a systemd user unit (`~/.config/systemd/user/sh.jmunch.gateway.service`). The service runs the same interpreter that ran `install`, and logs to `~/.jmunch/logs/`. `start` / `stop` / `restart` / `status` manage it afterwards; `uninstall` unloads and removes it. Use `--label` to run more than one instance.
 
