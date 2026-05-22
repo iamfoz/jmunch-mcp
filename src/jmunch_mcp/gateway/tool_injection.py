@@ -8,6 +8,7 @@ ever diverge again.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from ..verbs import TOOL_SCHEMAS
@@ -56,16 +57,71 @@ def anthropic_tools() -> list[dict[str, Any]]:
     return out
 
 
-def should_inject(request_tools: list[Any] | None, mode: str) -> bool:
-    """Policy: 'always' always injects, 'never' never, 'auto' only when the
-    request already declares a non-empty tools array (the app is doing
-    tool-calling — safe to add more)."""
+def should_inject(mode: str, *, has_handle: bool) -> bool:
+    """Verb-injection policy:
+
+      always — inject unconditionally.
+      never  — never inject.
+      auto   — inject only when the (already handle-ified) request carries a
+               handle envelope. That is exactly when the verbs are needed: a
+               handle exists to drill into. No handle → the verbs would have
+               nothing to operate on, so injecting them is pure overhead.
+
+    `auto` keys off the handle envelope rather than the request's `tools`
+    array: the verbs are useful precisely when jmunch handle-ified something,
+    regardless of whether — or how — the app declared its own tools.
+    """
     if mode == "never":
         return False
     if mode == "always":
         return True
-    # auto
-    return bool(request_tools)
+    return has_handle  # auto
+
+
+def _looks_like_handle_envelope(text: str) -> bool:
+    """True if `text` is a jMRI handle envelope — a JSON object whose
+    `result` carries a string `handle`."""
+    try:
+        env = json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    return (
+        isinstance(env, dict)
+        and isinstance(env.get("result"), dict)
+        and isinstance(env["result"].get("handle"), str)
+    )
+
+
+def _openai_request_has_handle(req: dict[str, Any]) -> bool:
+    """True if any `role: "tool"` message in `req` is a handle envelope."""
+    for m in req.get("messages") or []:
+        if (isinstance(m, dict) and m.get("role") == "tool"
+                and isinstance(m.get("content"), str)
+                and _looks_like_handle_envelope(m["content"])):
+            return True
+    return False
+
+
+def _anthropic_request_has_handle(req: dict[str, Any]) -> bool:
+    """True if any `tool_result` block in `req` is a handle envelope."""
+    for m in req.get("messages") or []:
+        if not (isinstance(m, dict) and isinstance(m.get("content"), list)):
+            continue
+        for block in m["content"]:
+            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                continue
+            content = block.get("content")
+            candidates: list[str] = []
+            if isinstance(content, str):
+                candidates.append(content)
+            elif isinstance(content, list):
+                candidates.extend(
+                    c["text"] for c in content
+                    if isinstance(c, dict) and isinstance(c.get("text"), str)
+                )
+            if any(_looks_like_handle_envelope(t) for t in candidates):
+                return True
+    return False
 
 
 # Static system instruction explaining handle envelopes. Injected into every
@@ -144,10 +200,10 @@ def inject_into_openai_request(
     if not out.get("model") and default_model:
         out["model"] = default_model
 
-    existing = out.get("tools")
-    if not should_inject(existing if isinstance(existing, list) else None, mode):
+    if not should_inject(mode, has_handle=_openai_request_has_handle(out)):
         return out
 
+    existing = out.get("tools")
     merged = list(existing) if isinstance(existing, list) else []
     have_names = {
         t.get("function", {}).get("name") for t in merged if isinstance(t, dict)
@@ -175,10 +231,10 @@ def inject_into_anthropic_request(
     if not out.get("model") and default_model:
         out["model"] = default_model
 
-    existing = out.get("tools")
-    if not should_inject(existing if isinstance(existing, list) else None, mode):
+    if not should_inject(mode, has_handle=_anthropic_request_has_handle(out)):
         return out
 
+    existing = out.get("tools")
     merged = list(existing) if isinstance(existing, list) else []
     have_names = {t.get("name") for t in merged if isinstance(t, dict)}
     for jt in anthropic_tools():
