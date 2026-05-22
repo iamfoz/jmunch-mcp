@@ -1,6 +1,31 @@
 # jmunch-mcp
 
-Transparent MCP proxy that reduces the token cost of large upstream tool responses for nearly every other MCP server imaginable. Wraps a single upstream MCP, forwards every call, and handle-ifies fat payloads into content-aware backends the agent can query with a small set of universal verbs (`peek`, `slice`, `search`, `aggregate`, `describe`, `list_handles`).
+Transparent token-saving proxy for LLM tool calls. It handle-ifies fat tool responses into compact, queryable handles — the model sees a small summary and drills in with a few universal verbs (`peek`, `slice`, `search`, `aggregate`, `describe`) instead of paying for the whole payload. It runs in **two modes**: an **MCP proxy** for MCP clients, and a **gateway** for any OpenAI-/Anthropic-API app.
+
+## Two ways to run jmunch-mcp
+
+jmunch-mcp has **two independent modes**. They share the same token-saving core but are wired up completely differently — pick the one that matches how your tool reaches models, and ignore the other. You do not need both.
+
+### Mode 1 — MCP proxy
+
+For **MCP clients**: Claude Desktop, Claude Code, Cursor, Windsurf, Continue. It wraps a single upstream **MCP server** over stdio, forwards every call, and handle-ifies fat responses on the way back. Set up with `jmunch-mcp init` — see [MCP proxy setup](#mcp-proxy-setup).
+
+### Mode 2 — Gateway (universal proxy)
+
+For **any app that speaks the OpenAI or Anthropic HTTP API**: LangChain, LlamaIndex, CrewAI, AutoGen, Aider, Cline, agent runtimes (the Hermes agent included), or a raw SDK. It runs as a local HTTP service — point the app's `base_url` at it, with no changes to the app's code.
+
+What the gateway gives you:
+
+- **Handle-ification + drill-in verbs** — fat `tool_result` payloads become compact handles; the `jmunch_*` verbs are injected and resolved locally, so drilling in costs zero upstream tokens.
+- **Context-aware compression** — compresses only when a request is large relative to the model's context window, and never the most recent tool_results (the agent's live working set).
+- **Background service** — `jmunch-mcp gateway install` runs it under launchd (macOS) or systemd (Linux), restarting on failure.
+- **Per-upstream default-model fallback**, a real **`/v1/models`** passthrough, a self-identifying **`X-Jmunch-Gateway`** response header, per-request **`X-Jmunch-Handleify`** / **`X-Jmunch-Inject`** controls, and an opt-in **`JMUNCH_DEBUG_DUMP`** that records exact upstream requests for debugging.
+
+Set up with `jmunch-mcp gateway` — see [Gateway (universal proxy)](#gateway-universal-proxy).
+
+> **Picking the wrong mode is the most common setup mistake.** If your app calls an LLM over HTTP, you want the **Gateway** — the MCP proxy will not help it. Rule of thumb: *MCP client → Mode 1; everything else → Mode 2.*
+
+Both modes feed the same [dashboard](#dashboard).
 
 ## Benchmarks
 
@@ -34,7 +59,7 @@ cd jmunch-mcp
 pip install -e .
 ```
 
-## Quickstart
+## MCP proxy setup
 
 ```bash
 jmunch-mcp init
@@ -50,7 +75,7 @@ jmunch-mcp --config examples/config.toml
 
 Configure your MCP client to launch `jmunch-mcp --config <path>` instead of the upstream server directly. Add `--report` to print a session summary on shutdown.
 
-## Gateway mode (v2 — universal proxy)
+## Gateway (universal proxy)
 
 The MCP proxy above saves tokens for MCP clients. The **gateway** saves tokens for *any* AI application that speaks the OpenAI or Anthropic HTTP API — LangChain, LlamaIndex, CrewAI, AutoGen, Continue, Cline, Aider, or a raw SDK. No code changes in the app; just point `base_url` at jmunch.
 
@@ -95,6 +120,20 @@ jmunch-mcp dashboard --open       # also open in your default browser
 ```
 
 Flags: `--port` (default `7878`), `--host` (default `127.0.0.1`), `--db <path>` to point at a non-default metrics DB, `--open` to launch the browser. Metrics only populate once proxies have recorded calls, so run your client against a wrapped upstream first.
+
+## Integrations — `contrib/`
+
+The [`contrib/`](contrib/) directory holds **optional, agent-specific helpers**. Nothing there is part of the core package — it is not imported, not `pip`-installed, and not shipped in the wheel — so the proxy and gateway stay agent-agnostic. Each subdirectory targets one agent or framework.
+
+### Hermes agent users
+
+The Hermes agent uses jmunch-mcp through the **Gateway** ([Mode 2](#two-ways-to-run-jmunch-mcp)), not the MCP proxy: point Hermes' `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` at the gateway and it works with nothing installed inside the Hermes environment — the gateway does all the work.
+
+[`contrib/hermes-agent/`](contrib/hermes-agent/) adds:
+
+- **`update-jmunch.sh`** — pulls the latest build into the gateway's venv from a stable checkout path and restarts the service. A safe replacement for ad-hoc `pip install -e /tmp/...` flows.
+
+See [`contrib/hermes-agent/README.md`](contrib/hermes-agent/README.md) for setup and the full list of options.
 
 ## License
 
