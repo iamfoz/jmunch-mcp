@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one call, so a memory-extraction call sees full-fidelity tool content.
   A per-request config override, parallel to `X-Jmunch-Inject`.
 
+### Changed
+- **Gateway: `inject_tools = "auto"` now keys off the handle envelope, not
+  the request's `tools` array.** `auto` injects the jmunch verbs (and the
+  handle-envelope system instruction) exactly when the forwarded request
+  carries a handle envelope — i.e. precisely when the model needs the
+  verbs to drill in. Previously `auto` guessed from whether the app
+  declared `tools`, which missed a large tool result on a request that
+  omitted the `tools` array, and needlessly injected the verbs on
+  tool-using turns that had nothing to drill into.
+
 ### Fixed
 - **Gateway: model no longer mistakes a handle envelope for a
   user-attached file.** A static system instruction explaining handle

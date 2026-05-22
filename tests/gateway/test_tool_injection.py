@@ -3,6 +3,8 @@ and respects the auto / always / never policy. Pure unit tests — no network,
 no aiohttp."""
 from __future__ import annotations
 
+import json
+
 from jmunch_mcp.gateway.tool_injection import (
     HANDLE_ENVELOPE_SYSTEM,
     anthropic_tools,
@@ -36,27 +38,25 @@ def test_name_roundtrip():
 
 
 def test_should_inject_policy():
-    # auto: only when tools present
-    assert should_inject([{"type": "function"}], "auto") is True
-    assert should_inject([], "auto") is False
-    assert should_inject(None, "auto") is False
-    # always: always
-    assert should_inject([], "always") is True
-    assert should_inject(None, "always") is True
-    # never: never
-    assert should_inject([{"type": "function"}], "never") is False
+    # always / never ignore the handle signal
+    assert should_inject("always", has_handle=False) is True
+    assert should_inject("never", has_handle=True) is False
+    # auto follows the handle signal: inject when there's an envelope to drill
+    assert should_inject("auto", has_handle=True) is True
+    assert should_inject("auto", has_handle=False) is False
 
 
-def test_openai_injection_auto_no_existing_tools_skips():
+def test_openai_injection_auto_no_handle_skips():
+    # auto + no handle envelope → injection inactive, even with app tools.
     req = {"model": "gpt-4", "messages": []}
     out = inject_into_openai_request(req, mode="auto")
     assert "tools" not in out
 
 
-def test_openai_injection_auto_appends():
+def test_openai_injection_appends():
     app_tool = {"type": "function", "function": {"name": "my_tool", "description": "x", "parameters": {}}}
     req = {"model": "gpt-4", "messages": [], "tools": [app_tool]}
-    out = inject_into_openai_request(req, mode="auto")
+    out = inject_into_openai_request(req, mode="always")
     names = [t["function"]["name"] for t in out["tools"]]
     assert "my_tool" in names
     assert "jmunch_peek" in names
@@ -100,7 +100,7 @@ def test_openai_injection_adds_handle_envelope_system():
         "tools": [{"type": "function",
                    "function": {"name": "t", "description": "x", "parameters": {}}}],
     }
-    out = inject_into_openai_request(req, mode="auto")
+    out = inject_into_openai_request(req, mode="always")
     systems = _openai_systems(out["messages"])
     assert len(systems) == 1
     assert HANDLE_ENVELOPE_SYSTEM in systems[0]["content"]
@@ -114,7 +114,7 @@ def test_openai_injection_merges_into_existing_system():
         "tools": [{"type": "function",
                    "function": {"name": "t", "description": "x", "parameters": {}}}],
     }
-    out = inject_into_openai_request(req, mode="auto")
+    out = inject_into_openai_request(req, mode="always")
     systems = _openai_systems(out["messages"])
     assert len(systems) == 1  # merged, not a second system message
     assert "APP RULES" in systems[0]["content"]
@@ -130,7 +130,7 @@ def test_openai_system_injection_idempotent():
 
 
 def test_openai_no_system_when_injection_skipped():
-    # auto mode + no tools → injection is inactive → no system instruction.
+    # auto mode + no handle envelope → injection inactive → no system text.
     req = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
     out = inject_into_openai_request(req, mode="auto")
     assert "tools" not in out
@@ -140,7 +140,7 @@ def test_openai_no_system_when_injection_skipped():
 def test_anthropic_injection_adds_system_when_absent():
     req = {"model": "claude-opus", "messages": [],
            "tools": [{"name": "t", "description": "x", "input_schema": {"type": "object"}}]}
-    out = inject_into_anthropic_request(req, mode="auto")
+    out = inject_into_anthropic_request(req, mode="always")
     assert out["system"] == HANDLE_ENVELOPE_SYSTEM
 
 
@@ -189,3 +189,70 @@ def test_anthropic_injection_substitutes_default_model_even_when_skipped():
     out = inject_into_anthropic_request(req, mode="never", default_model="claude-x")
     assert out["model"] == "claude-x"
     assert "tools" not in out
+
+
+# ---------------------------------------------------------------------------
+# auto mode keys off the handle envelope, not the request's tools array
+# ---------------------------------------------------------------------------
+
+# Minimal jMRI handle envelope — what handle-ification leaves in a tool result.
+_ENVELOPE = json.dumps({"_meta": {}, "result": {"handle": "h_test", "kind": "json"}})
+
+
+def test_openai_auto_injects_when_handle_envelope_present():
+    req = {
+        "model": "gpt-4",
+        "tools": [{"type": "function",
+                   "function": {"name": "t", "description": "x", "parameters": {}}}],
+        "messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "tool_calls": [
+                {"id": "c0", "type": "function",
+                 "function": {"name": "t", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c0", "content": _ENVELOPE},
+        ],
+    }
+    out = inject_into_openai_request(req, mode="auto")
+    assert "jmunch_peek" in [t["function"]["name"] for t in out["tools"]]
+    assert HANDLE_ENVELOPE_SYSTEM in _openai_systems(out["messages"])[0]["content"]
+
+
+def test_openai_auto_skips_when_no_handle_even_with_tools():
+    # Tools present but NO handle envelope → auto must NOT inject. (This is the
+    # behaviour change: the old auto keyed off `tools`, not the envelope.)
+    req = {
+        "model": "gpt-4",
+        "tools": [{"type": "function",
+                   "function": {"name": "t", "description": "x", "parameters": {}}}],
+        "messages": [{"role": "user", "content": "go"}],
+    }
+    out = inject_into_openai_request(req, mode="auto")
+    assert "jmunch_peek" not in [t["function"]["name"] for t in (out.get("tools") or [])]
+    assert _openai_systems(out["messages"]) == []
+
+
+def test_anthropic_auto_injects_when_handle_envelope_present():
+    req = {
+        "model": "claude-opus",
+        "tools": [{"name": "t", "description": "x", "input_schema": {"type": "object"}}],
+        "messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "tu0", "name": "t", "input": {}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu0", "content": _ENVELOPE}]},
+        ],
+    }
+    out = inject_into_anthropic_request(req, mode="auto")
+    assert "jmunch_peek" in [t["name"] for t in out["tools"]]
+    assert HANDLE_ENVELOPE_SYSTEM in out["system"]
+
+
+def test_anthropic_auto_skips_when_no_handle_even_with_tools():
+    req = {
+        "model": "claude-opus",
+        "tools": [{"name": "t", "description": "x", "input_schema": {"type": "object"}}],
+        "messages": [{"role": "user", "content": "go"}],
+    }
+    out = inject_into_anthropic_request(req, mode="auto")
+    assert "jmunch_peek" not in [t["name"] for t in (out.get("tools") or [])]
