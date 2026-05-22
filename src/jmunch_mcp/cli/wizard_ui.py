@@ -53,7 +53,7 @@ class UpstreamModal(ModalScreen[dict | None]):
     UpstreamModal {
         align: center middle;
     }
-    UpstreamModal > Vertical {
+    UpstreamModal > VerticalScroll {
         background: $panel;
         padding: 1 2;
         width: 64;
@@ -75,8 +75,16 @@ class UpstreamModal(ModalScreen[dict | None]):
 
     def compose(self) -> ComposeResult:
         i = self.initial
-        yield Vertical(
-            Label("[b]Upstream[/b]"),
+        # When editing, leave the API-key field blank — we don't have the
+        # current value (it lives in ~/.jmunch/env, mode 0600). A blank
+        # entry on save means "keep the existing env entry untouched".
+        editing = bool(i)
+        key_help = (
+            "API key (blank = keep existing)" if editing
+            else "API key (stored in ~/.jmunch/env, mode 0600; blank to skip)"
+        )
+        yield VerticalScroll(
+            Label(f"[b]{'Edit upstream' if editing else 'Add upstream'}[/b]"),
             Label("Name"),
             Input(value=i.get("name", ""), id="name"),
             Label("Kind"),
@@ -91,7 +99,7 @@ class UpstreamModal(ModalScreen[dict | None]):
                 value=i.get("base_url", _DEFAULT_BASE["openai"]),
                 id="base_url",
             ),
-            Label("API key (stored in ~/.jmunch/env, mode 0600; blank to skip)"),
+            Label(key_help),
             Input(password=True, id="api_key"),
             Horizontal(
                 Button(label="Save", id="save", variant="success"),
@@ -179,6 +187,7 @@ class SetupApp(App):
             DataTable(id="upstream_table", cursor_type="row"),
             Horizontal(
                 Button(label="Add upstream", id="add", variant="primary"),
+                Button(label="Edit selected", id="edit"),
                 Button(label="Remove selected", id="remove"),
                 classes="actions",
             ),
@@ -224,6 +233,35 @@ class SetupApp(App):
         bid = event.button.id
         if bid == "add":
             self.push_screen(UpstreamModal(), self._on_upstream_added)
+        elif bid == "edit":
+            table = self.query_one("#upstream_table", DataTable)
+            row = table.cursor_row
+            if not (0 <= row < len(self.upstreams)):
+                self.notify("Select a row first", severity="warning")
+                return
+            existing = dict(self.upstreams[row])
+
+            def _on_edited(updated: dict | None, idx: int = row) -> None:
+                if updated is None:
+                    return
+                # name collision check against OTHER upstreams
+                for i, u in enumerate(self.upstreams):
+                    if i != idx and u["name"] == updated["name"]:
+                        self.notify(
+                            f"'{updated['name']}' already exists",
+                            severity="error",
+                        )
+                        return
+                api_key = updated.pop("_api_key", "")
+                self.upstreams[idx] = updated
+                if api_key:
+                    env_var = _KIND_ENV.get(updated["kind"])
+                    if env_var:
+                        self.secrets[env_var] = api_key
+                self._refresh_table()
+                self.notify(f"Updated '{updated['name']}'")
+
+            self.push_screen(UpstreamModal(initial=existing), _on_edited)
         elif bid == "remove":
             table = self.query_one("#upstream_table", DataTable)
             row = table.cursor_row
