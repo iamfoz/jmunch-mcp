@@ -21,6 +21,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_LABEL = "sh.jmunch.gateway"
@@ -232,14 +233,30 @@ def _install(
     if backend == "launchd":
         plist = _launchd_plist_path(label)
         plist.parent.mkdir(parents=True, exist_ok=True)
+        uid = os.getuid()
+        target = f"gui/{uid}/{label}"
+        # Unload any existing registration BEFORE rewriting the plist so
+        # launchd doesn't keep a stale handle to the previous file content.
+        _launchctl("bootout", target)
+        time.sleep(0.5)  # bootout is mildly async; give launchd a tick
         plist.write_bytes(
             render_launchd_plist(label, config, out_log, err_log, env=env)
         )
-        uid = os.getuid()
-        _launchctl("bootout", f"gui/{uid}/{label}")  # ignore: may not be loaded
         r = _launchctl("bootstrap", f"gui/{uid}", str(plist))
+        # EIO ("Bootstrap failed: 5: Input/output error") almost always
+        # means a leftover registration — one more bootout+bootstrap clears it.
+        if r.returncode != 0 and "5: Input/output error" in r.stderr:
+            _launchctl("bootout", target)
+            time.sleep(0.5)
+            r = _launchctl("bootstrap", f"gui/{uid}", str(plist))
         if r.returncode != 0:
-            print(f"error: launchctl bootstrap failed: {r.stderr.strip()}", file=sys.stderr)
+            print(f"error: launchctl bootstrap failed: {r.stderr.strip()}",
+                  file=sys.stderr)
+            print(
+                f"  manual recovery:  launchctl bootout {target} "
+                f"&& pkill -f 'jmunch_mcp.*gateway' ; jmunch-mcp gateway install",
+                file=sys.stderr,
+            )
             return 1
         print(f"installed launchd agent: {plist}")
     else:
