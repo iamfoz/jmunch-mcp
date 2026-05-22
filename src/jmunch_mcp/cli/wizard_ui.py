@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -30,7 +31,7 @@ from textual.widgets import (
 )
 
 from . import service
-from .wizard import _read_gateway_toml, _write_gateway_toml
+from .wizard import _read_gateway_toml, _test_upstream, _write_gateway_toml
 
 
 _KIND_ENV = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
@@ -102,6 +103,7 @@ class UpstreamModal(ModalScreen[dict | None]):
             Label(key_help),
             Input(password=True, id="api_key"),
             Horizontal(
+                Button(label="Test", id="test"),
                 Button(label="Save", id="save", variant="success"),
                 Button(label="Cancel", id="cancel", variant="error"),
             ),
@@ -123,6 +125,9 @@ class UpstreamModal(ModalScreen[dict | None]):
         if event.button.id == "cancel":
             self.dismiss(None)
             return
+        if event.button.id == "test":
+            self._test_action()
+            return
         name = self.query_one("#name", Input).value.strip()
         if not name:
             self.app.bell()
@@ -137,6 +142,30 @@ class UpstreamModal(ModalScreen[dict | None]):
             "base_url": base_url,
             "_api_key": api_key,
         })
+
+    def _test_action(self) -> None:
+        base_url = self.query_one("#base_url", Input).value.strip()
+        kind = str(self.query_one("#kind", Select).value)
+        api_key = self.query_one("#api_key", Input).value
+        # In edit mode the api_key field starts blank — fall back to the
+        # current value in ~/.jmunch/env so Test reflects the real key.
+        if not api_key:
+            env_var = _KIND_ENV.get(kind)
+            if env_var:
+                env = service._read_env_file(service._default_env_path())
+                api_key = env.get(env_var, "")
+        if not base_url:
+            self.app.notify("Base URL is required", severity="warning")
+            return
+        self.app.notify(f"Testing {base_url}…")
+        self._run_test(base_url, kind, api_key)
+
+    @work(thread=True, exclusive=True)
+    def _run_test(self, base_url: str, kind: str, api_key: str) -> None:
+        ok, msg = _test_upstream(base_url, kind, api_key)
+        self.app.call_from_thread(
+            self.app.notify, msg, severity="information" if ok else "error"
+        )
 
 
 # --------------------------------------------------------------------------

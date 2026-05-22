@@ -176,3 +176,133 @@ def test_add_upstream_without_config(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "no gateway config" in err
     assert "gateway setup" in err
+
+
+# --------------------------------------------------------------------------
+# _test_upstream — connection probe used by the Test button (and re-usable
+# from a future CLI). urllib is mocked so we don't hit the network.
+# --------------------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _patch_urlopen(monkeypatch, handler):
+    """Replace urllib.request.urlopen with `handler(req, timeout=10)`."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", handler)
+
+
+def test_test_upstream_openai_ok(monkeypatch):
+    import json
+    captured: dict = {}
+
+    def fake(req, timeout=10):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.header_items())
+        return _FakeResponse(200, json.dumps(
+            {"data": [{"id": "gpt-4"}, {"id": "gpt-4o"}, {"id": "o1"}]}
+        ).encode())
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("https://api.openai.com/", "openai", "sk-test")
+    assert ok is True
+    assert "OK" in msg and "3 models" in msg
+    assert captured["url"] == "https://api.openai.com/v1/models"
+    # urllib title-cases header names, so check case-insensitively
+    auth = {k.lower(): v for k, v in captured["headers"].items()}.get("authorization")
+    assert auth == "Bearer sk-test"
+
+
+def test_test_upstream_anthropic_uses_anthropic_headers(monkeypatch):
+    import json
+    captured: dict = {}
+
+    def fake(req, timeout=10):
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeResponse(200, json.dumps({"data": [{"id": "claude-opus"}]}).encode())
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("https://api.anthropic.com", "anthropic", "sk-ant-x")
+    assert ok is True and "1 model" in msg
+    assert captured["headers"]["x-api-key"] == "sk-ant-x"
+    assert captured["headers"]["anthropic-version"] == "2023-06-01"
+    assert "authorization" not in captured["headers"]
+
+
+def test_test_upstream_401(monkeypatch):
+    import urllib.error
+
+    def fake(req, timeout=10):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized",
+                                     hdrs=None, fp=None)
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("https://api.openai.com", "openai", "sk-bad")
+    assert ok is False
+    assert "401" in msg
+    assert "rejected" in msg
+
+
+def test_test_upstream_401_without_key_suggests_adding_one(monkeypatch):
+    import urllib.error
+
+    def fake(req, timeout=10):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized",
+                                     hdrs=None, fp=None)
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("https://api.openai.com", "openai", "")
+    assert ok is False
+    assert "requires an API key" in msg
+
+
+def test_test_upstream_network_error(monkeypatch):
+    import urllib.error
+
+    def fake(req, timeout=10):
+        raise urllib.error.URLError("Name or service not known")
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("https://does-not-exist.invalid", "openai", "k")
+    assert ok is False
+    assert "could not reach" in msg
+
+
+def test_test_upstream_local_server_no_key(monkeypatch):
+    """Ollama / LM Studio etc.: kind=openai, no key, returns 200."""
+    import json
+    captured: dict = {}
+
+    def fake(req, timeout=10):
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeResponse(200, json.dumps({"data": [{"id": "llama-3"}]}).encode())
+
+    _patch_urlopen(monkeypatch, fake)
+    ok, msg = wizard._test_upstream("http://127.0.0.1:11434", "openai", "")
+    assert ok is True
+    # no Authorization header sent when key is empty
+    assert "authorization" not in captured["headers"]
+
+
+def test_test_upstream_rejects_unknown_kind(monkeypatch):
+    ok, msg = wizard._test_upstream("https://x", "weird", "k")
+    assert ok is False
+    assert "unknown upstream kind" in msg
+
+
+def test_test_upstream_rejects_blank_base_url():
+    ok, msg = wizard._test_upstream("", "openai", "k")
+    assert ok is False
+    assert "base URL is required" in msg
