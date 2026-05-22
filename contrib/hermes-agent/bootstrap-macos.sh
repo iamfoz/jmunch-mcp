@@ -12,6 +12,7 @@ set -euo pipefail
 
 JMUNCH_REPO="${JMUNCH_REPO:-https://github.com/iamfoz/jmunch-mcp.git}"
 JMUNCH_BRANCH="${JMUNCH_BRANCH:-deploy}"
+JMUNCH_EXTRAS="${JMUNCH_EXTRAS:-gateway,setup}"
 CONFIG="$HOME/.jmunch/gateway.toml"
 
 # 1. Homebrew — required. We don't install it for you (it needs sudo).
@@ -28,8 +29,11 @@ fi
 pipx ensurepath >/dev/null
 
 # 3. jmunch-mcp (deploy build) into its own isolated pipx venv.
+#    `pipx install --force` fails on the pipx+uv backend when an existing venv
+#    was not created in the current session, so do uninstall → install instead.
 echo "==> installing jmunch-mcp from '$JMUNCH_BRANCH'"
-pipx install --force "jmunch-mcp[gateway] @ git+${JMUNCH_REPO}@${JMUNCH_BRANCH}"
+pipx uninstall jmunch-mcp >/dev/null 2>&1 || true
+pipx install "jmunch-mcp[${JMUNCH_EXTRAS}] @ git+${JMUNCH_REPO}@${JMUNCH_BRANCH}"
 
 # pipx drops the command in ~/.local/bin — call it by path in case this
 # shell has not yet picked up the PATH change `pipx ensurepath` just made.
