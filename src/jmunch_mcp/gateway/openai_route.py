@@ -33,6 +33,7 @@ from ..metrics import MetricsDB
 from ..registry import HandleRegistry
 from ..verbs import Dispatcher
 from .config import GatewayConfig
+from .debug_dump import dump_upstream_request
 from .handleify import maybe_handleify
 from .tool_injection import (
     inject_into_openai_request,
@@ -379,6 +380,7 @@ async def _verb_loop(
             next_request["tools"] = base_tools
 
         try:
+            dump_upstream_request(next_request, route="openai", phase="verb-loop")
             response = await upstream.complete(next_request)
         except UpstreamError as e:
             return e
@@ -436,6 +438,7 @@ async def handle_chat_completions(
 
     try:
         try:
+            dump_upstream_request(working, route="openai", phase="first")
             response = await upstream.complete(working)
         except UpstreamError as e:
             err = make_error(UPSTREAM_ERROR, f"upstream {spec.name} returned {e.status}",
@@ -545,6 +548,7 @@ async def stream_chat_completions(
 
     try:
         try:
+            dump_upstream_request(working, route="openai", phase="first-stream")
             first = await _first_turn_streaming(upstream, working)
         except UpstreamError as e:
             log.warning("upstream %s %d: %s", spec.name, e.status, e.body[:500])
