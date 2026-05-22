@@ -1,10 +1,15 @@
 """Scaffold, install, and manage the jmunch gateway from the CLI.
 
+  jmunch-mcp gateway setup    → interactive first-time setup wizard
   jmunch-mcp gateway init     → write a starter ~/.jmunch/gateway.toml
   jmunch-mcp gateway install  → run the gateway as a user-level service —
                                 a launchd agent on macOS, a systemd user
                                 unit on Linux — plus start / stop / restart
                                 / status / uninstall.
+
+API keys live in ~/.jmunch/env (KEY=VALUE per line, mode 0600). `install`
+reads that file and embeds the values into the service environment, so
+the running gateway can see them.
 
 Agent-agnostic: it scaffolds and manages the gateway HTTP service only.
 Nothing here knows about any particular AI application or agent framework.
@@ -19,7 +24,9 @@ import sys
 from pathlib import Path
 
 DEFAULT_LABEL = "sh.jmunch.gateway"
-GATEWAY_VERBS = ("init", "install", "start", "stop", "restart", "status", "uninstall")
+_WIZARD_VERBS = ("setup", "add-upstream", "remove-upstream")
+_SERVICE_VERBS = ("init", "install", "start", "stop", "restart", "status", "uninstall")
+GATEWAY_VERBS = _WIZARD_VERBS + _SERVICE_VERBS
 
 # Starter gateway config written by `jmunch-mcp gateway init`. Valid as-is;
 # the user edits the [[upstream]] block to point at their provider.
@@ -63,6 +70,44 @@ def _default_config() -> Path:
     return _jmunch_home() / "gateway.toml"
 
 
+def _default_env_path() -> Path:
+    return _jmunch_home() / "env"
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Parse a KEY=VALUE secrets file. Comments (#) and blank lines ignored.
+    Values are taken verbatim (no quote stripping). Missing file → {}."""
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k = k.strip()
+        if k:
+            out[k] = v.strip()
+    return out
+
+
+def _write_env_file(path: Path, env: dict[str, str]) -> None:
+    """Write the env dict to `path` (mode 0600), preserving order."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# jmunch gateway environment — read by `jmunch-mcp gateway install`.",
+        "# KEY=VALUE per line. Comments (#) and blank lines are ignored.",
+        "",
+    ]
+    for k, v in env.items():
+        lines.append(f"{k}={v}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:  # pragma: no cover — non-POSIX
+        pass
+
+
 def _log_paths() -> tuple[Path, Path]:
     logs = _jmunch_home() / "logs"
     return logs / "gateway.out.log", logs / "gateway.err.log"
@@ -87,18 +132,20 @@ def _backend() -> str | None:
 
 def render_launchd_plist(
     label: str, config: Path, out_log: Path, err_log: Path,
-    *, debug_dump: bool = False,
+    *, env: dict[str, str] | None = None,
 ) -> bytes:
-    return plistlib.dumps({
+    d: dict = {
         "Label": label,
         "ProgramArguments": _program_args(config),
-        "EnvironmentVariables": {"JMUNCH_DEBUG_DUMP": "1" if debug_dump else "0"},
         "RunAtLoad": True,
         "KeepAlive": True,
         "StandardOutPath": str(out_log),
         "StandardErrorPath": str(err_log),
         "WorkingDirectory": str(Path.home()),
-    })
+    }
+    if env:
+        d["EnvironmentVariables"] = dict(env)
+    return plistlib.dumps(d)
 
 
 def _sd_quote(arg: str) -> str:
@@ -106,16 +153,18 @@ def _sd_quote(arg: str) -> str:
 
 
 def render_systemd_unit(
-    config: Path, out_log: Path, err_log: Path, *, debug_dump: bool = False
+    config: Path, out_log: Path, err_log: Path,
+    *, env: dict[str, str] | None = None,
 ) -> str:
     exec_start = " ".join(_sd_quote(a) for a in _program_args(config))
+    env_block = "".join(f"Environment={k}={v}\n" for k, v in (env or {}).items())
     return (
         "[Unit]\n"
         "Description=jmunch gateway — token-saving OpenAI/Anthropic proxy\n"
         "After=network.target\n"
         "\n"
         "[Service]\n"
-        f"Environment=JMUNCH_DEBUG_DUMP={'1' if debug_dump else '0'}\n"
+        f"{env_block}"
         f"ExecStart={exec_start}\n"
         "Restart=on-failure\n"
         "RestartSec=2\n"
@@ -170,7 +219,13 @@ def _init(config: Path, *, force: bool) -> int:
     return 0
 
 
-def _install(label: str, config: Path, backend: str, *, debug_dump: bool) -> int:
+def _install(
+    label: str, config: Path, backend: str,
+    *, debug_dump: bool, env_file: Path | None = None,
+) -> int:
+    env_extras = _read_env_file(env_file) if env_file else {}
+    env = {"JMUNCH_DEBUG_DUMP": "1" if debug_dump else "0", **env_extras}
+
     out_log, err_log = _log_paths()
     out_log.parent.mkdir(parents=True, exist_ok=True)
 
@@ -178,7 +233,7 @@ def _install(label: str, config: Path, backend: str, *, debug_dump: bool) -> int
         plist = _launchd_plist_path(label)
         plist.parent.mkdir(parents=True, exist_ok=True)
         plist.write_bytes(
-            render_launchd_plist(label, config, out_log, err_log, debug_dump=debug_dump)
+            render_launchd_plist(label, config, out_log, err_log, env=env)
         )
         uid = os.getuid()
         _launchctl("bootout", f"gui/{uid}/{label}")  # ignore: may not be loaded
@@ -191,8 +246,7 @@ def _install(label: str, config: Path, backend: str, *, debug_dump: bool) -> int
         unit = _systemd_unit_path(label)
         unit.parent.mkdir(parents=True, exist_ok=True)
         unit.write_text(
-            render_systemd_unit(config, out_log, err_log, debug_dump=debug_dump),
-            encoding="utf-8",
+            render_systemd_unit(config, out_log, err_log, env=env), encoding="utf-8",
         )
         _systemctl("daemon-reload")
         r = _systemctl("enable", "--now", unit.name)
@@ -204,6 +258,8 @@ def _install(label: str, config: Path, backend: str, *, debug_dump: bool) -> int
     print(f"  config:     {config}")
     print(f"  logs:       {out_log}")
     print(f"  debug dump: {'on' if debug_dump else 'off'} (JMUNCH_DEBUG_DUMP)")
+    if env_extras:
+        print(f"  env vars:   {', '.join(env_extras)}  (from {env_file})")
     return 0
 
 
@@ -293,6 +349,11 @@ def _systemd_control(verb: str, label: str) -> int:
 
 
 def main(verb: str, argv: list[str]) -> int:
+    # Interactive verbs live in cli/wizard.py.
+    if verb in _WIZARD_VERBS:
+        from .wizard import main as wizard_main
+        return wizard_main(verb, argv)
+
     parser = argparse.ArgumentParser(prog=f"jmunch-mcp gateway {verb}")
 
     # `init` only writes a file — no platform backend needed.
@@ -309,6 +370,11 @@ def main(verb: str, argv: list[str]) -> int:
     if verb == "install":
         parser.add_argument("--config", default=str(_default_config()),
                             help="path to gateway.toml (default: %(default)s)")
+        parser.add_argument(
+            "--env-file", default=str(_default_env_path()),
+            help="KEY=VALUE secrets file embedded into the service env "
+                 "(default: %(default)s; missing file is OK)",
+        )
         parser.add_argument(
             "--debug-dump", action="store_true",
             help="set JMUNCH_DEBUG_DUMP=1 in the service environment (default: 0)",
@@ -329,9 +395,11 @@ def main(verb: str, argv: list[str]) -> int:
         config = Path(args.config).expanduser().resolve()
         if not config.is_file():
             print(f"error: no gateway config at {config}", file=sys.stderr)
-            print("  run `jmunch-mcp gateway init` first, or pass --config <path>.",
-                  file=sys.stderr)
+            print("  run `jmunch-mcp gateway setup` (interactive) or "
+                  "`jmunch-mcp gateway init`.", file=sys.stderr)
             return 2
-        return _install(args.label, config, backend, debug_dump=args.debug_dump)
+        env_file = Path(args.env_file).expanduser()
+        return _install(args.label, config, backend,
+                        debug_dump=args.debug_dump, env_file=env_file)
 
     return _control(verb, args.label, backend)

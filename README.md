@@ -30,8 +30,10 @@ To install it as a standalone command-line tool — recommended on macOS, where 
 
 ```bash
 brew install pipx && pipx ensurepath
-pipx install 'jmunch-mcp[gateway]'
+pipx install 'jmunch-mcp[gateway,setup]'   # gateway runtime + interactive setup wizard
 ```
+
+The `[setup]` extra adds [Textual](https://textual.textualize.io/) for `jmunch-mcp gateway setup`. Leave it off if you'd rather edit `~/.jmunch/gateway.toml` by hand — `gateway init` still scaffolds a minimal config you can fill in.
 
 From source:
 
@@ -92,21 +94,61 @@ Per-request controls via headers:
 
 Metrics flow into the same dashboard as the MCP proxy. Filter with `?surface=gateway` or `?surface=mcp` on `/api/stats` and `/api/calls`.
 
-### Run the gateway as a background service
+### Gateway setup — quick start
 
-`jmunch-mcp gateway --config ...` runs in the foreground. To keep the gateway running across logins and restart it on failure, scaffold a config and install it as a user-level service:
+The interactive way (needs the `[setup]` extra for the Textual TUI):
 
 ```bash
-jmunch-mcp gateway init        # writes a starter ~/.jmunch/gateway.toml — edit it
-jmunch-mcp gateway install     # installs the service
+jmunch-mcp gateway setup
+```
+
+That walks you through: a listen address, one-or-more upstreams (name / kind / base URL / API key — entered in a masked field), the default upstream, the inject-tools mode, and the threshold. It writes `~/.jmunch/gateway.toml` and `~/.jmunch/env` (the latter holds your API keys, mode `0600`), then offers to install the launchd / systemd service. After that you have a running gateway and you can carry on.
+
+Manage upstreams later:
+
+```bash
+jmunch-mcp gateway add-upstream                       # interactive: one upstream + its API key
+jmunch-mcp gateway remove-upstream --name openai
+```
+
+Manage the service:
+
+```bash
 jmunch-mcp gateway status
-jmunch-mcp gateway restart
+jmunch-mcp gateway restart      # bounce the service (e.g. after editing gateway.toml)
+jmunch-mcp gateway install      # re-render the unit; needed after editing ~/.jmunch/env
 jmunch-mcp gateway uninstall
 ```
 
-`init` writes a commented starter config to `~/.jmunch/gateway.toml`; edit the `[[upstream]]` block to point at your provider. `install` defaults to that path — pass `--config <path>` to use another.
+#### Files the gateway uses
 
-On macOS this generates a launchd agent (`~/Library/LaunchAgents/sh.jmunch.gateway.plist`); on Linux, a systemd user unit (`~/.config/systemd/user/sh.jmunch.gateway.service`). The service runs the same interpreter that ran `install`, and logs to `~/.jmunch/logs/`. `start` / `stop` / `restart` / `status` manage it afterwards; `uninstall` unloads and removes it. Use `--label` to run more than one instance.
+All under `~/.jmunch/`:
+
+| path | what |
+|---|---|
+| `gateway.toml` | Config (upstreams, interception, listen). Hand-editable. |
+| `env` | API keys, `KEY=VALUE` per line (mode `0600`). `gateway install` reads this and embeds the values into the service environment, so the running gateway actually sees them. |
+| `logs/gateway.{out,err}.log` | Service stdout / stderr. |
+| `handles.db` | Handle store (SQLite). |
+| `debug/` | Per-call upstream-request dumps — only when `JMUNCH_DEBUG_DUMP=1`. |
+
+To rotate a key: edit `~/.jmunch/env`, run `jmunch-mcp gateway install` (re-renders the unit with the new value), then `jmunch-mcp gateway restart`. `install` reads `~/.jmunch/env` by default; override the path with `--env-file`.
+
+#### Without the wizard
+
+If you'd rather skip Textual entirely:
+
+```bash
+jmunch-mcp gateway init                  # writes a minimal ~/.jmunch/gateway.toml
+$EDITOR ~/.jmunch/gateway.toml           # edit the [[upstream]] block
+$EDITOR ~/.jmunch/env                    # add lines like: OPENAI_API_KEY=sk-...
+chmod 600 ~/.jmunch/env
+jmunch-mcp gateway install
+```
+
+#### Service mechanics
+
+On macOS the unit is a launchd agent (`~/Library/LaunchAgents/sh.jmunch.gateway.plist`); on Linux, a systemd user unit (`~/.config/systemd/user/sh.jmunch.gateway.service`). The service runs the same interpreter that ran `install`, restarts on failure, and logs to `~/.jmunch/logs/`. Use `--label` to run more than one instance.
 
 The generated unit declares `JMUNCH_DEBUG_DUMP=0` in the service environment (debug dumps off). Pass `--debug-dump` to `install` to set it to `1`.
 

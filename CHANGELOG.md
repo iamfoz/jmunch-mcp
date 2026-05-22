@@ -8,16 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`jmunch-mcp gateway setup` — interactive setup wizard (Textual).**
+  Walks the user through listen address, one-or-more upstreams (name /
+  kind / base URL / masked API key), default upstream, inject-tools mode,
+  and threshold; writes `~/.jmunch/gateway.toml` plus `~/.jmunch/env`
+  (mode `0600`); optionally calls `install` to register the service.
+  Textual ships as a new optional extra `[setup]` (`pipx install
+  'jmunch-mcp[gateway,setup]'` or `pipx inject jmunch-mcp textual`). When
+  the extra is absent, the wizard prints a friendly install hint and
+  exits — the non-interactive `init` / `install` path still works.
+- **`gateway add-upstream` (interactive Textual modal) and
+  `gateway remove-upstream --name <n>` (non-interactive)** — manage
+  upstreams without re-running `setup`. `remove-upstream` auto-updates
+  `default_upstream` if you remove the current one, and refuses to leave
+  the gateway with zero upstreams.
+- **`~/.jmunch/env` — KEY=VALUE secrets file (mode `0600`).** Read by
+  `gateway install` and embedded into the rendered unit so the
+  launchd / systemd service actually sees the API keys. Hand-editable;
+  `setup` / `add-upstream` write to it for you. `install --env-file
+  <path>` overrides the location; the file is optional.
 - **`jmunch-mcp gateway init` / `install` — scaffold and run the gateway
-  as a background service.** New `gateway` sub-verbs: `init` writes a
-  commented starter `~/.jmunch/gateway.toml`; `install` / `start` / `stop`
-  / `restart` / `status` / `uninstall` generate and manage a user-level
-  service — a launchd agent on macOS, a systemd user unit on Linux.
-  `install` defaults to `~/.jmunch/gateway.toml` (override with
-  `--config`), runs the same interpreter that ran it, restarts on failure,
-  and logs to `~/.jmunch/logs/`. `--label` allows multiple instances.
-  Agent-agnostic; unsupported platforms fall back to the foreground
-  `gateway` run with a clear message. The generated unit declares
+  as a background service.** `init` writes a commented starter
+  `~/.jmunch/gateway.toml`; `install` / `start` / `stop` / `restart` /
+  `status` / `uninstall` generate and manage a user-level service —
+  launchd on macOS, systemd user unit on Linux. `install` defaults
+  `--config` to `~/.jmunch/gateway.toml` and `--env-file` to
+  `~/.jmunch/env`. Runs the same interpreter that ran `install`; restarts
+  on failure; logs to `~/.jmunch/logs/`; `--label` allows multiple
+  instances. Unsupported platforms fall back to the foreground `gateway`
+  run with a clear message. The generated unit declares
   `JMUNCH_DEBUG_DUMP=0` in the service environment; `install --debug-dump`
   sets it to `1`.
 - `contrib/` — optional, clearly-fenced integration helpers that are not

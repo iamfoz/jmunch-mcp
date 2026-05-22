@@ -7,7 +7,10 @@ Subcommands:
     jmunch-mcp init  [...]            Scan + generate wrapper configs.
     jmunch-mcp dashboard [...]        Local metrics web UI.
     jmunch-mcp gateway --config ...   Run the HTTP gateway (foreground).
+    jmunch-mcp gateway setup          Interactive first-time setup wizard.
     jmunch-mcp gateway init           Write a starter ~/.jmunch/gateway.toml.
+    jmunch-mcp gateway add-upstream   Add an upstream (interactive).
+    jmunch-mcp gateway remove-upstream --name <n>   Remove an upstream.
     jmunch-mcp gateway install|start|stop|restart|status|uninstall
                                       Manage the gateway as a background
                                       service (launchd on macOS, systemd
