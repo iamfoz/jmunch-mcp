@@ -127,7 +127,7 @@ All under `~/.jmunch/`:
 | path | what |
 |---|---|
 | `gateway.toml` | Config (upstreams, interception, listen). Hand-editable. |
-| `env` | API keys, `KEY=VALUE` per line (mode `0600`). `gateway install` reads this and embeds the values into the service environment, so the running gateway actually sees them. |
+| `env` | API keys, `KEY=VALUE` per line (mode `0600`). The wizard stores each upstream's key under its own variable named after the upstream (`<NAME>_API_KEY`, e.g. `AIROUTER_API_KEY`), so two upstreams of the same kind don't collide on one shared key. `gateway install` reads this and embeds the values into the service environment, so the running gateway actually sees them. |
 | `logs/gateway.out.log` | Routine activity (DEBUG/INFO — requests, lifecycle). |
 | `logs/gateway.err.log` | Warnings and errors only. A non-empty file always means a real problem. |
 | `handles.db` | Handle store (SQLite). |

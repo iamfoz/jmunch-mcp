@@ -31,14 +31,35 @@ from textual.widgets import (
 )
 
 from . import service
-from .wizard import _read_gateway_toml, _test_upstream, _write_gateway_toml
+from .wizard import (
+    _env_var_for,
+    _read_gateway_toml,
+    _test_upstream,
+    _write_gateway_toml,
+)
 
 
-_KIND_ENV = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+# Kind-default env vars — matches the gateway config loader's fallback for
+# upstreams that have no explicit `api_key_env`. The wizard ALWAYS writes
+# an explicit `api_key_env` on save, but reads need this for back-compat
+# with hand-rolled configs that omit it.
+_KIND_DEFAULT_ENV = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
 _DEFAULT_BASE = {
     "openai": "https://api.openai.com",
     "anthropic": "https://api.anthropic.com",
 }
+
+
+def _current_env_var(upstream: dict) -> str:
+    """The env var the gateway WOULD read for this upstream as-currently-
+    configured: explicit `api_key_env` wins, else fall back to the kind
+    default."""
+    return (
+        upstream.get("api_key_env")
+        or _KIND_DEFAULT_ENV.get(upstream.get("kind", ""))
+        or _env_var_for(upstream.get("name", ""))
+    )
 
 
 # --------------------------------------------------------------------------
@@ -81,8 +102,9 @@ class UpstreamModal(ModalScreen[dict | None]):
         # entry on save means "keep the existing env entry untouched".
         editing = bool(i)
         key_help = (
-            "API key (blank = keep existing)" if editing
-            else "API key (stored in ~/.jmunch/env, mode 0600; blank to skip)"
+            "API key (blank = keep existing key in ~/.jmunch/env)" if editing
+            else "API key (stored in ~/.jmunch/env as <NAME>_API_KEY, "
+                 "mode 0600; blank to skip)"
         )
         yield VerticalScroll(
             Label(f"[b]{'Edit upstream' if editing else 'Add upstream'}[/b]"),
@@ -136,24 +158,33 @@ class UpstreamModal(ModalScreen[dict | None]):
         kind = str(self.query_one("#kind", Select).value)
         base_url = self.query_one("#base_url", Input).value.strip()
         api_key = self.query_one("#api_key", Input).value
+        # Every upstream gets its own env var derived from its name so two
+        # upstreams of the same kind (e.g. airouter + deepseek) can't
+        # collide on OPENAI_API_KEY.
         self.dismiss({
             "name": name,
             "kind": kind,
             "base_url": base_url,
+            "api_key_env": _env_var_for(name),
             "_api_key": api_key,
         })
 
     def _test_action(self) -> None:
+        name = self.query_one("#name", Input).value.strip()
         base_url = self.query_one("#base_url", Input).value.strip()
         kind = str(self.query_one("#kind", Select).value)
         api_key = self.query_one("#api_key", Input).value
         # In edit mode the api_key field starts blank — fall back to the
-        # current value in ~/.jmunch/env so Test reflects the real key.
+        # current value in ~/.jmunch/env (looked up under THIS upstream's
+        # env var) so Test reflects the real key.
         if not api_key:
-            env_var = _KIND_ENV.get(kind)
-            if env_var:
-                env = service._read_env_file(service._default_env_path())
-                api_key = env.get(env_var, "")
+            env_var = (
+                self.initial.get("api_key_env")
+                or _KIND_DEFAULT_ENV.get(kind)
+                or _env_var_for(name)
+            )
+            env = service._read_env_file(service._default_env_path())
+            api_key = env.get(env_var, "")
         if not base_url:
             self.app.notify("Base URL is required", severity="warning")
             return
@@ -282,11 +313,18 @@ class SetupApp(App):
                         )
                         return
                 api_key = updated.pop("_api_key", "")
+                old_env_var = _current_env_var(self.upstreams[idx])
+                new_env_var = updated.get("api_key_env") or _env_var_for(updated["name"])
                 self.upstreams[idx] = updated
                 if api_key:
-                    env_var = _KIND_ENV.get(updated["kind"])
-                    if env_var:
-                        self.secrets[env_var] = api_key
+                    self.secrets[new_env_var] = api_key
+                elif old_env_var != new_env_var:
+                    # Rename without a new key — carry the old value over so
+                    # the upstream keeps working after the next install.
+                    existing = service._read_env_file(service._default_env_path())
+                    carried = self.secrets.get(old_env_var) or existing.get(old_env_var, "")
+                    if carried:
+                        self.secrets[new_env_var] = carried
                 self._refresh_table()
                 self.notify(f"Updated '{updated['name']}'")
 
@@ -310,11 +348,10 @@ class SetupApp(App):
             self.notify(f"'{upstream['name']}' already exists", severity="error")
             return
         api_key = upstream.pop("_api_key", "")
+        env_var = upstream.get("api_key_env") or _env_var_for(upstream["name"])
         self.upstreams.append(upstream)
         if api_key:
-            env_var = _KIND_ENV.get(upstream["kind"])
-            if env_var:
-                self.secrets[env_var] = api_key
+            self.secrets[env_var] = api_key
         self._refresh_table()
         # Auto-fill the default upstream on first add.
         if len(self.upstreams) == 1:
@@ -451,12 +488,11 @@ def run_add_upstream() -> int:
     print(f"Updated {config_path}: added '{upstream['name']}'.")
 
     if api_key:
-        env_var = _KIND_ENV.get(upstream["kind"])
-        if env_var:
-            existing_env = service._read_env_file(env_path)
-            existing_env[env_var] = api_key
-            service._write_env_file(env_path, existing_env)
-            print(f"Updated {env_path}: {env_var}")
+        env_var = upstream.get("api_key_env") or _env_var_for(upstream["name"])
+        existing_env = service._read_env_file(env_path)
+        existing_env[env_var] = api_key
+        service._write_env_file(env_path, existing_env)
+        print(f"Updated {env_path}: {env_var}")
 
     print("\nRe-install + restart to apply:")
     print("  jmunch-mcp gateway install")

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Setup wizard: per-upstream API-key env vars.** The wizard now writes
+  each upstream's `api_key_env` to its config as `<NAME>_API_KEY` (e.g.
+  `AIROUTER_API_KEY`, `DEEPSEEK_API_KEY`) instead of relying on the
+  kind-default `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`. Previously two
+  upstreams of the same kind silently overwrote one another's key in
+  `~/.jmunch/env`. Editing an upstream and changing its name carries
+  the existing key forward to the new env var if no new key is entered,
+  so renames don't break a working upstream. The CLI `gateway
+  add-upstream` does the same. Hand-rolled configs without
+  `api_key_env` continue to fall back to the kind default (back-compat).
 - **Gateway logging is now split by severity** instead of being lumped
   into stderr by Python's default `basicConfig(stream=sys.stderr)`.
   DEBUG/INFO go to stdout (→ `~/.jmunch/logs/gateway.out.log`), WARNING+

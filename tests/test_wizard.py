@@ -179,6 +179,30 @@ def test_add_upstream_without_config(tmp_path, monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
+# _env_var_for — derives a per-upstream env var name so two upstreams of
+# the same kind don't collide on OPENAI_API_KEY / ANTHROPIC_API_KEY.
+# --------------------------------------------------------------------------
+
+def test_env_var_for_canonical_names():
+    assert wizard._env_var_for("openai") == "OPENAI_API_KEY"
+    assert wizard._env_var_for("anthropic") == "ANTHROPIC_API_KEY"
+    assert wizard._env_var_for("airouter") == "AIROUTER_API_KEY"
+    assert wizard._env_var_for("deepseek") == "DEEPSEEK_API_KEY"
+
+
+def test_env_var_for_sanitises_unsafe_chars():
+    assert wizard._env_var_for("my-finetune") == "MY_FINETUNE_API_KEY"
+    assert wizard._env_var_for("openai.eu") == "OPENAI_EU_API_KEY"
+    assert wizard._env_var_for("a b c") == "A_B_C_API_KEY"
+
+
+def test_env_var_for_strips_edge_underscores_and_handles_empty():
+    assert wizard._env_var_for("-weird-") == "WEIRD_API_KEY"
+    assert wizard._env_var_for("") == "UPSTREAM_API_KEY"
+    assert wizard._env_var_for("---") == "UPSTREAM_API_KEY"
+
+
+# --------------------------------------------------------------------------
 # _test_upstream — connection probe used by the Test button (and re-usable
 # from a future CLI). urllib is mocked so we don't hit the network.
 # --------------------------------------------------------------------------
