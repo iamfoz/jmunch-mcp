@@ -15,6 +15,7 @@ the interactive ones print a clear "install textual" hint.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -102,6 +103,26 @@ def _write_gateway_toml(path: Path, data: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------
 # upstream connection test (also called from the Textual UI)
 # --------------------------------------------------------------------------
+
+_ENV_VAR_BAD = re.compile(r"[^A-Z0-9_]")
+
+
+def _env_var_for(upstream_name: str) -> str:
+    """Derive the env-var name that holds an upstream's API key.
+
+    The upstream name is uppercased; any chars outside `[A-Z0-9_]` become
+    underscores; `_API_KEY` is appended. Examples:
+        openai      → OPENAI_API_KEY
+        anthropic   → ANTHROPIC_API_KEY
+        airouter    → AIROUTER_API_KEY
+        my-finetune → MY_FINETUNE_API_KEY
+
+    This is what the wizard uses so that two openai-kind upstreams
+    (e.g. airouter + deepseek) don't collide on a single OPENAI_API_KEY.
+    """
+    safe = _ENV_VAR_BAD.sub("_", (upstream_name or "").upper()).strip("_")
+    return f"{safe or 'UPSTREAM'}_API_KEY"
+
 
 def _test_upstream(base_url: str, kind: str, api_key: str) -> tuple[bool, str]:
     """GET <base_url>/v1/models with the auth scheme for `kind` and report.
