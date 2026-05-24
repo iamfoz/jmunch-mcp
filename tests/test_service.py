@@ -178,3 +178,33 @@ def test_install_embeds_env_file_vars_in_unit(monkeypatch, tmp_path):
     assert "Environment=JMUNCH_DEBUG_DUMP=0" in unit
     assert "Environment=OPENAI_API_KEY=sk-test" in unit
     assert "Environment=FOO=bar" in unit
+
+
+def test_gateway_logging_splits_info_to_stdout_and_warning_to_stderr(capsys):
+    """Routine activity (INFO) → stdout → gateway.out.log;
+    warnings and errors → stderr → gateway.err.log."""
+    import logging
+    from jmunch_mcp.__main__ import _setup_gateway_logging
+
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    try:
+        _setup_gateway_logging("DEBUG")
+        log = logging.getLogger("test.gateway.logging")
+        log.info("routine activity here")
+        log.warning("something to look at")
+        log.error("a real problem")
+        for h in root.handlers:
+            h.flush()
+        out, err = capsys.readouterr()
+
+        assert "routine activity here" in out
+        assert "routine activity here" not in err
+        assert "something to look at" in err
+        assert "a real problem" in err
+        assert "something to look at" not in out
+        assert "a real problem" not in out
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)

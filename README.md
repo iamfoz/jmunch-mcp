@@ -128,7 +128,8 @@ All under `~/.jmunch/`:
 |---|---|
 | `gateway.toml` | Config (upstreams, interception, listen). Hand-editable. |
 | `env` | API keys, `KEY=VALUE` per line (mode `0600`). `gateway install` reads this and embeds the values into the service environment, so the running gateway actually sees them. |
-| `logs/gateway.{out,err}.log` | Service stdout / stderr. |
+| `logs/gateway.out.log` | Routine activity (DEBUG/INFO — requests, lifecycle). |
+| `logs/gateway.err.log` | Warnings and errors only. A non-empty file always means a real problem. |
 | `handles.db` | Handle store (SQLite). |
 | `debug/` | Per-call upstream-request dumps — only when `JMUNCH_DEBUG_DUMP=1`. |
 

@@ -69,12 +69,33 @@ def _run_gateway(argv: list[str]) -> int:
 
     config = load_gateway(args.config)
     level = args.log_level or config.log_level
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        stream=sys.stderr,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    _setup_gateway_logging(level)
     return serve(config)
+
+
+def _setup_gateway_logging(level: str) -> None:
+    """Split-stream logging for the gateway:
+      - DEBUG / INFO  → stdout (→ ~/.jmunch/logs/gateway.out.log)
+      - WARNING+      → stderr (→ ~/.jmunch/logs/gateway.err.log)
+    A non-empty .err.log therefore always means a real problem. (Python's
+    default `basicConfig(stream=sys.stderr)` lumps everything into stderr,
+    which makes the .err.log mostly routine activity — the opposite of
+    useful.)"""
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    out_h = logging.StreamHandler(sys.stdout)
+    out_h.setFormatter(fmt)
+    out_h.addFilter(lambda record: record.levelno < logging.WARNING)
+
+    err_h = logging.StreamHandler(sys.stderr)
+    err_h.setFormatter(fmt)
+    err_h.setLevel(logging.WARNING)
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(out_h)
+    root.addHandler(err_h)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
 
 def main() -> int:

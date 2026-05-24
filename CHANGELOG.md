@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Gateway logging is now split by severity** instead of being lumped
+  into stderr by Python's default `basicConfig(stream=sys.stderr)`.
+  DEBUG/INFO go to stdout (→ `~/.jmunch/logs/gateway.out.log`), WARNING+
+  to stderr (→ `~/.jmunch/logs/gateway.err.log`), so a non-empty
+  `gateway.err.log` always signals a real problem and `gateway.out.log`
+  carries the routine request-by-request activity it was always meant
+  to hold.
+
 ### Added
 - **`jmunch-mcp gateway setup` — interactive setup wizard (Textual).**
   Walks the user through listen address, one-or-more upstreams (name /
