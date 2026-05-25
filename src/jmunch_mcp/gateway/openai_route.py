@@ -309,6 +309,17 @@ async def _verb_loop(
             "role": "assistant",
             "content": message.get("content"),
             "tool_calls": [last_call],
+            # DeepSeek V4 / Kimi / MiMo thinking-mode upstreams require a
+            # non-empty `reasoning_content` on every assistant turn.
+            # Preserve what the upstream sent; pad with " " when absent —
+            # tolerated by validators that require the field, harmless on
+            # those that ignore it. "" is also rejected by DeepSeek V4 Pro.
+            "reasoning_content": (
+                message["reasoning_content"]
+                if isinstance(message.get("reasoning_content"), str)
+                and message["reasoning_content"]
+                else " "
+            ),
         })
         compact_messages.append({
             "role": "tool",

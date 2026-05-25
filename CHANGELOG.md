@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Gateway verb loop: preserve `reasoning_content` for thinking-mode
+  upstreams.** DeepSeek V4 Pro, Kimi `/coding` / Moonshot thinking mode,
+  and Xiaomi MiMo thinking all require a non-empty `reasoning_content`
+  on every assistant turn replayed back. The synthesized assistant
+  message that the verb loop builds for each drill-in round dropped the
+  field, so the next round hit the upstream with HTTP 400
+  *"The reasoning_content in the thinking mode must be passed back to
+  the API."* The OpenAI route's `_verb_loop` now copies
+  `reasoning_content` from the upstream's response onto the synthesized
+  message, or pads with `" "` when absent (tolerated by validators that
+  require the field, harmless on those that ignore it; `""` is *not*
+  tolerated by DeepSeek V4 Pro). Anthropic's route already preserved
+  thinking blocks naturally — they ride along as content blocks (with
+  their `signature`) on the assistant message and are deep-copied.
 - **Gateway verb loop no longer destroys conversational context or
   hides the app's tools.** The OpenAI route's `_verb_loop` rebuilt a
   synthetic context from scratch (`_compact_base_messages` /
