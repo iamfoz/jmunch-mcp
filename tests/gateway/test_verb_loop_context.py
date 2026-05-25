@@ -105,6 +105,87 @@ def test_openai_verb_loop_preserves_full_conversation(tmp_path, monkeypatch):
     assert "The user's request was" not in json.dumps(follow_up)
 
 
+def test_openai_verb_loop_preserves_reasoning_content_through_drill_in(tmp_path, monkeypatch):
+    """Regression: DeepSeek V4 Pro / Kimi / MiMo thinking-mode upstreams
+    require a non-empty `reasoning_content` on every assistant turn. The
+    synthesized assistant message in the verb loop must carry it forward
+    from the upstream's response, or the next drill-in round 400s with
+    "The reasoning_content in the thinking mode must be passed back"."""
+    core = _core(tmp_path, monkeypatch)
+    turn1 = {"id": "c1", "choices": [{"index": 0, "finish_reason": "tool_calls",
+        "message": {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "The user wants a summary — I should drill in.",
+            "tool_calls": [
+                {"id": "tc1", "type": "function",
+                 "function": {"name": "jmunch_list_handles", "arguments": "{}"}},
+            ],
+        }}]}
+    turn2 = {"id": "c2", "choices": [{"index": 0, "finish_reason": "stop",
+        "message": {"role": "assistant", "content": "done"}}]}
+    fake = _FakeUpstream([turn1, turn2], kind="openai")
+
+    req = {
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "summarise the records"}],
+    }
+    config = GatewayConfig(
+        default_upstream="fake",
+        upstreams=[UpstreamSpec(name="fake", kind="openai", base_url="http://fake")],
+        interception=Interception(),
+    )
+    status, _ = asyncio.run(handle_chat_completions(
+        req, upstream_override=None, config=config,
+        upstream_factory=lambda spec: fake, **core,
+    ))
+    assert status == 200
+    assert len(fake.calls) == 2
+
+    synthetic = next(
+        m for m in fake.calls[1]["messages"]
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    )
+    assert synthetic["reasoning_content"] == \
+        "The user wants a summary — I should drill in."
+
+
+def test_openai_verb_loop_pads_missing_reasoning_content(tmp_path, monkeypatch):
+    """If the upstream's response carries no `reasoning_content` (non-
+    thinking model), pad with a single space so thinking-mode upstreams
+    still accept the replay — "" is rejected by DeepSeek V4 Pro."""
+    core = _core(tmp_path, monkeypatch)
+    turn1 = {"id": "c1", "choices": [{"index": 0, "finish_reason": "tool_calls",
+        "message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "tc1", "type": "function",
+             "function": {"name": "jmunch_list_handles", "arguments": "{}"}},
+        ]}}]}
+    turn2 = {"id": "c2", "choices": [{"index": 0, "finish_reason": "stop",
+        "message": {"role": "assistant", "content": "done"}}]}
+    fake = _FakeUpstream([turn1, turn2], kind="openai")
+
+    req = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "go"}],
+    }
+    config = GatewayConfig(
+        default_upstream="fake",
+        upstreams=[UpstreamSpec(name="fake", kind="openai", base_url="http://fake")],
+        interception=Interception(),
+    )
+    status, _ = asyncio.run(handle_chat_completions(
+        req, upstream_override=None, config=config,
+        upstream_factory=lambda spec: fake, **core,
+    ))
+    assert status == 200
+
+    synthetic = next(
+        m for m in fake.calls[1]["messages"]
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    )
+    assert synthetic["reasoning_content"] == " "
+
+
 def test_openai_verb_loop_preserves_full_tools_array(tmp_path, monkeypatch):
     """Regression: the follow-up call must carry the app's REAL tools
     (not just `jmunch_*` verbs). Stripping to jmunch-only saved a few
