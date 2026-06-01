@@ -40,6 +40,11 @@ def _default_api_key_env(kind: str) -> str | None:
 class Interception:
     threshold_tokens: int = 2000
     inject_tools: str = "auto"   # "auto" | "always" | "never"
+    # Attach Anthropic prompt-cache markers (`cache_control: ephemeral`) to
+    # the stable prefix (system + tools) so successive turns hit the
+    # provider's KV cache. Has no effect on OpenAI-kind upstreams — OpenAI
+    # caches prefixes automatically without markers.
+    cache_optimize: bool = False
 
 
 @dataclass
@@ -118,6 +123,7 @@ def load(path: str | os.PathLike) -> GatewayConfig:
     interception = Interception(
         threshold_tokens=int(inter_raw.get("threshold_tokens", 2000)),
         inject_tools=str(inter_raw.get("inject_tools", "auto")),
+        cache_optimize=bool(inter_raw.get("cache_optimize", False)),
     )
     if interception.inject_tools not in ("auto", "always", "never"):
         raise ValueError(f"{p}: interception.inject_tools must be auto|always|never")
