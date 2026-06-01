@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gateway: optional image compression on outbound requests.** When
+  the new `[interception] images = true` flag is set, the gateway walks
+  the request, decodes any base64 image (Anthropic `image` source-type
+  base64; OpenAI `image_url` data-URL), downsizes if larger than
+  `image_max_dimension` (default 1568 px, Anthropic's recommended max),
+  and re-encodes as JPEG at `image_quality` (default 85). HTTPS/HTTP
+  image URLs are left untouched (we don't fetch them just to transform).
+  Drop-in safe — only kicks in when re-encode actually saves bytes.
+  Ships as a new optional `[images]` extra (`pip install
+  'jmunch-mcp[images]'` for Pillow). Without Pillow the path silently
+  no-ops.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed

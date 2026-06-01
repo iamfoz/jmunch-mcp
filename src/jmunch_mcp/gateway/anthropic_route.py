@@ -255,6 +255,15 @@ async def handle_messages(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.images:
+        from .images import ImageSettings, compress_anthropic_messages
+        new_msgs, _img_saved = compress_anthropic_messages(
+            prepped.get("messages") or [],
+            ImageSettings(enabled=True,
+                          max_dimension=config.interception.image_max_dimension,
+                          quality=config.interception.image_quality),
+        )
+        prepped = {**prepped, "messages": new_msgs}
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
 
     upstream: Upstream = upstream_factory(spec)
@@ -335,6 +344,15 @@ async def stream_messages(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.images:
+        from .images import ImageSettings, compress_anthropic_messages
+        new_msgs, _img_saved = compress_anthropic_messages(
+            prepped.get("messages") or [],
+            ImageSettings(enabled=True,
+                          max_dimension=config.interception.image_max_dimension,
+                          quality=config.interception.image_quality),
+        )
+        prepped = {**prepped, "messages": new_msgs}
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
     prepped = dict(prepped)
     prepped["stream"] = True

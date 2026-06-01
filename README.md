@@ -76,6 +76,7 @@ What it does, transparently:
 - **Injects jmunch verbs** (`peek`, `slice`, `search`, `aggregate`, `describe`, `summarize`, `list_handles`) into the request's `tools` array so the model can drill in.
 - **Short-circuits verb calls** — when the model calls `jmunch_peek`, the gateway resolves it locally against the handle registry and synthesizes the follow-up turn. The app never sees jmunch tool_calls; those completions cost zero upstream tokens.
 - **Persists handles** to `~/.jmunch/handles.db` with a configurable TTL so they survive restarts and cross-session reads.
+- **Compresses outbound images** (opt-in via `[interception] images = true`). Decodes any base64 image in the request — Anthropic `image` source-type base64 and OpenAI `image_url` data-URLs — downsizes anything larger than `image_max_dimension` (default 1568 px, Anthropic's recommended max), and re-encodes JPEG at `image_quality` (default 85). HTTPS/HTTP image URLs are left alone. Drop-in safe — the re-encode is skipped when it wouldn't save bytes. Needs the `[images]` extra (`pip install 'jmunch-mcp[images]'` for Pillow); without it the path silently no-ops.
 - **Streams both ways** — OpenAI SSE and Anthropic event streams are buffer-then-replayed with correct verb resolution.
 
 Per-request controls via headers:

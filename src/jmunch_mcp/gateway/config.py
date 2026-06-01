@@ -40,6 +40,10 @@ def _default_api_key_env(kind: str) -> str | None:
 class Interception:
     threshold_tokens: int = 2000
     inject_tools: str = "auto"   # "auto" | "always" | "never"
+    # Optional image compression (needs the [images] extra → Pillow).
+    images: bool = False
+    image_max_dimension: int = 1568
+    image_quality: int = 85
 
 
 @dataclass
@@ -118,6 +122,9 @@ def load(path: str | os.PathLike) -> GatewayConfig:
     interception = Interception(
         threshold_tokens=int(inter_raw.get("threshold_tokens", 2000)),
         inject_tools=str(inter_raw.get("inject_tools", "auto")),
+        images=bool(inter_raw.get("images", False)),
+        image_max_dimension=int(inter_raw.get("image_max_dimension", 1568)),
+        image_quality=int(inter_raw.get("image_quality", 85)),
     )
     if interception.inject_tools not in ("auto", "always", "never"):
         raise ValueError(f"{p}: interception.inject_tools must be auto|always|never")
