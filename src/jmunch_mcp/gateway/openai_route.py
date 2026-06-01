@@ -428,6 +428,15 @@ async def handle_chat_completions(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.images:
+        from .images import ImageSettings, compress_openai_messages
+        new_msgs, _img_saved = compress_openai_messages(
+            prepped.get("messages") or [],
+            ImageSettings(enabled=True,
+                          max_dimension=config.interception.image_max_dimension,
+                          quality=config.interception.image_quality),
+        )
+        prepped = {**prepped, "messages": new_msgs}
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
 
     upstream: Upstream = upstream_factory(spec)
@@ -535,6 +544,15 @@ async def stream_chat_completions(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_openai_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.images:
+        from .images import ImageSettings, compress_openai_messages
+        new_msgs, _img_saved = compress_openai_messages(
+            prepped.get("messages") or [],
+            ImageSettings(enabled=True,
+                          max_dimension=config.interception.image_max_dimension,
+                          quality=config.interception.image_quality),
+        )
+        prepped = {**prepped, "messages": new_msgs}
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
     # Ensure upstream sees stream=true for the first turn.
     prepped = dict(prepped)
