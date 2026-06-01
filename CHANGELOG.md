@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Gateway: Anthropic prompt-cache markers.** New `[interception]
+  cache_optimize` (default `false` — opt-in; set to `true` to enable) attaches
+  `cache_control: {type: "ephemeral"}` to the stable prefix of every
+  request forwarded to an `anthropic`-kind upstream — the system message
+  and the tail of the tools array. Anthropic's prompt cache then keys
+  off that prefix and successive turns hit cache instead of re-tokenising
+  the system + tools every time. No effect on OpenAI-kind upstreams
+  (OpenAI's prompt cache is automatic on prefixes > 1024 tokens without
+  markers). Set `cache_optimize = false` to disable.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed

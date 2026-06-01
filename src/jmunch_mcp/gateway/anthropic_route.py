@@ -41,6 +41,48 @@ log = logging.getLogger("jmunch.gateway.anthropic")
 
 MAX_VERB_ROUNDS = 8
 
+_CACHE_EPHEMERAL = {"type": "ephemeral"}
+
+
+def attach_cache_control(req: dict[str, Any]) -> dict[str, Any]:
+    """Mark the stable prefix (system + tools) of an Anthropic request with
+    `cache_control: {type: "ephemeral"}` so successive turns hit the
+    provider's prompt cache. Returns a NEW request (no in-place mutation).
+
+    Anthropic caches the prefix up to and including each marker. Two
+    markers max get us:
+      - the full system message cached,
+      - the full tools array cached,
+    which is the bulk of repeat-turn bytes.
+    """
+    out = dict(req)
+
+    # --- system ---
+    sys_field = out.get("system")
+    if isinstance(sys_field, str) and sys_field:
+        out["system"] = [{"type": "text", "text": sys_field,
+                          "cache_control": _CACHE_EPHEMERAL}]
+    elif isinstance(sys_field, list) and sys_field:
+        new_sys = [dict(b) if isinstance(b, dict) else b for b in sys_field]
+        # Attach to the last text-like block; leave the rest untouched.
+        for i in range(len(new_sys) - 1, -1, -1):
+            block = new_sys[i]
+            if isinstance(block, dict):
+                block["cache_control"] = _CACHE_EPHEMERAL
+                break
+        out["system"] = new_sys
+
+    # --- tools ---
+    tools = out.get("tools")
+    if isinstance(tools, list) and tools:
+        new_tools = [dict(t) if isinstance(t, dict) else t for t in tools]
+        # Attach to the LAST tool, which caches the entire tools array.
+        if isinstance(new_tools[-1], dict):
+            new_tools[-1]["cache_control"] = _CACHE_EPHEMERAL
+        out["tools"] = new_tools
+
+    return out
+
 
 def _tool_result_text(block: dict[str, Any]) -> str | None:
     """Extract the textual payload from a `tool_result` content block.
@@ -255,6 +297,8 @@ async def handle_messages(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.cache_optimize and spec.kind == "anthropic":
+        prepped = attach_cache_control(prepped)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
 
     upstream: Upstream = upstream_factory(spec)
@@ -335,6 +379,8 @@ async def stream_messages(
         threshold_tokens=config.interception.threshold_tokens,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools)
+    if config.interception.cache_optimize and spec.kind == "anthropic":
+        prepped = attach_cache_control(prepped)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
     prepped = dict(prepped)
     prepped["stream"] = True
