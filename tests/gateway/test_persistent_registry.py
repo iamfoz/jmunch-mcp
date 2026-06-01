@@ -85,3 +85,15 @@ def test_register_without_source_skips_persist(tmp_path):
     reg2 = PersistentHandleRegistry(store_path=db, ttl_seconds=60)
     assert reg2.get(hid) is None
     reg2.close_db()
+
+
+def test_register_accepts_content_hash_kwarg(tmp_path):
+    """The persistent subclass must forward `content_hash` to the in-memory
+    base so the gateway's dedup path works against the on-disk registry."""
+    reg = PersistentHandleRegistry(store_path=tmp_path / "h.db", ttl_seconds=60)
+    rows = _rows()
+    be = TabularBackend(rows)
+    h = reg.register(be, be.size_bytes, "tabular", source=rows, content_hash="abc123")
+    assert h.content_hash == "abc123"
+    assert reg.find_by_hash("abc123") is h
+    reg.close_db()

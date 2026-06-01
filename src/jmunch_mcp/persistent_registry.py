@@ -77,8 +77,9 @@ class PersistentHandleRegistry(HandleRegistry):
         kind: str,
         *,
         source: Any = None,
+        content_hash: str | None = None,
     ) -> Handle:
-        h = super().register(backend, size_bytes, kind)
+        h = super().register(backend, size_bytes, kind, content_hash=content_hash)
         if source is not None:
             self._persist(h.id, kind, size_bytes, source)
         return h

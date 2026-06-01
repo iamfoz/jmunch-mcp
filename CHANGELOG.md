@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Content-addressed handle dedup.** The gateway now hashes every
+  inbound tool_result payload (SHA-256) before handle-ifying. If the
+  same bytes are already in the registry, the existing handle is reused
+  — no new backend is allocated. Within a single gateway process this
+  means multiple agents / sessions / repeated turns sharing one MCP
+  server get one handle per distinct payload (Hermes + a second agent
+  hitting the same GitHub PR list don't double-allocate). The envelope
+  is rebuilt per-request so the per-request `_meta.tokens_saved`
+  remains accurate on dedup hits. The hash index is kept consistent on
+  drop and LRU eviction.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed

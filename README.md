@@ -76,6 +76,7 @@ What it does, transparently:
 - **Injects jmunch verbs** (`peek`, `slice`, `search`, `aggregate`, `describe`, `summarize`, `list_handles`) into the request's `tools` array so the model can drill in.
 - **Short-circuits verb calls** — when the model calls `jmunch_peek`, the gateway resolves it locally against the handle registry and synthesizes the follow-up turn. The app never sees jmunch tool_calls; those completions cost zero upstream tokens.
 - **Persists handles** to `~/.jmunch/handles.db` with a configurable TTL so they survive restarts and cross-session reads.
+- **Deduplicates identical payloads.** Every inbound tool_result is hashed (SHA-256); a payload the gateway has already seen reuses the existing handle instead of allocating a new backend. Two agents (or two turns) hitting the same MCP server share one handle per distinct payload.
 - **Streams both ways** — OpenAI SSE and Anthropic event streams are buffer-then-replayed with correct verb resolution.
 
 Per-request controls via headers:
