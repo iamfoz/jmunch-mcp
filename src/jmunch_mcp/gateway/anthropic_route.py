@@ -28,9 +28,9 @@ from .anthropic_sse import (
     encode_message_as_sse,
     parse_anthropic_sse,
 )
-from .config import GatewayConfig
+from .config import GatewayConfig, Interception
 from .debug_dump import dump_upstream_request
-from .handleify import maybe_handleify
+from .handleify import maybe_handleify, recency_protected_count, request_is_eligible
 from .tool_injection import (
     inject_into_anthropic_request,
     is_jmunch_gateway_tool,
@@ -81,31 +81,55 @@ def _handleify_request_messages(
     *,
     registry: HandleRegistry,
     tracker: SavingsTracker,
-    threshold_tokens: int,
+    interception: Interception,
+    request_bytes: int,
 ) -> tuple[dict[str, Any], int, list[tuple[str, str]]]:
+    """Replace over-threshold `tool_result` block content with a jMRI handle
+    envelope. Gated by the context-aware fraction gate and the recency
+    window (last N tool_result blocks left verbatim) — see the OpenAI
+    route's twin for the rationale.
+    """
     messages = req.get("messages")
     if not isinstance(messages, list):
         return req, 0, []
+    model = req.get("model")
+    model_s = model if isinstance(model, str) else None
+    if not request_is_eligible(request_bytes, model_s, interception=interception):
+        return req, 0, []
+
+    # Recency window: protect the last N tool_result blocks, in document
+    # order across every message.
+    tr_coords: list[tuple[int, int]] = []
+    for mi, m in enumerate(messages):
+        if isinstance(m, dict) and isinstance(m.get("content"), list):
+            for bi, b in enumerate(m["content"]):
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tr_coords.append((mi, bi))
+    n_protected = recency_protected_count(len(tr_coords), interception.recency_window)
+    protected: set[tuple[int, int]] = (
+        set(tr_coords[len(tr_coords) - n_protected:]) if n_protected else set()
+    )
 
     new_messages: list[Any] = []
     total_saved = 0
     pairs: list[tuple[str, str]] = []
     mutated = False
 
-    for m in messages:
+    for mi, m in enumerate(messages):
         if not (isinstance(m, dict) and isinstance(m.get("content"), list)):
             new_messages.append(m)
             continue
         blocks = m["content"]
         new_blocks: list[Any] = []
         touched = False
-        for b in blocks:
-            if isinstance(b, dict) and b.get("type") == "tool_result":
+        for bi, b in enumerate(blocks):
+            if (isinstance(b, dict) and b.get("type") == "tool_result"
+                    and (mi, bi) not in protected):
                 text = _tool_result_text(b)
                 if isinstance(text, str):
                     out = maybe_handleify(
                         text, registry=registry, tracker=tracker,
-                        threshold_tokens=threshold_tokens,
+                        threshold_tokens=interception.threshold_tokens,
                     )
                     if out is not None:
                         env_text, _ = out
@@ -280,7 +304,7 @@ async def handle_messages(
 
     prepped, saved_on_request, raw_sent_pairs = _handleify_request_messages(
         req_body, registry=registry, tracker=tracker,
-        threshold_tokens=config.interception.threshold_tokens,
+        interception=config.interception, request_bytes=raw_request_bytes,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
@@ -361,7 +385,7 @@ async def stream_messages(
 
     prepped, saved_on_request, raw_sent_pairs = _handleify_request_messages(
         req_body, registry=registry, tracker=tracker,
-        threshold_tokens=config.interception.threshold_tokens,
+        interception=config.interception, request_bytes=raw_request_bytes,
     )
     prepped = inject_into_anthropic_request(prepped, mode=config.interception.inject_tools, default_model=resolved_model)
     exact_saved = _exact_savings(raw_sent_pairs, token_counter, model_s)
