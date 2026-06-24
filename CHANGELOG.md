@@ -145,6 +145,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-process lock and wrote its own stale in-memory total. `record()` now
   re-reads the on-disk totals under a cross-process file lock, so
   concurrent processes accumulate correctly.
+- **Setup wizard: per-upstream API-key env vars.** The wizard now writes
+  each upstream's `api_key_env` to its config as `<NAME>_API_KEY` (e.g.
+  `AIROUTER_API_KEY`, `DEEPSEEK_API_KEY`) instead of relying on the
+  kind-default `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`. Previously two
+  upstreams of the same kind silently overwrote one another's key in
+  `~/.jmunch/env`. Editing an upstream and changing its name carries
+  the existing key forward to the new env var if no new key is entered,
+  so renames don't break a working upstream. The CLI `gateway
+  add-upstream` does the same. Hand-rolled configs without
+  `api_key_env` continue to fall back to the kind default (back-compat).
+- **Gateway logging is now split by severity** instead of being lumped
+  into stderr by Python's default `basicConfig(stream=sys.stderr)`.
+  DEBUG/INFO go to stdout (→ `~/.jmunch/logs/gateway.out.log`), WARNING+
+  to stderr (→ `~/.jmunch/logs/gateway.err.log`), so a non-empty
+  `gateway.err.log` always signals a real problem and `gateway.out.log`
+  carries the routine request-by-request activity it was always meant
+  to hold.
+
+### Added
+- **`jmunch-mcp gateway setup` — interactive setup wizard (Textual).**
+  Walks the user through listen address, one-or-more upstreams (name /
+  kind / base URL / masked API key), default upstream, inject-tools mode,
+  and threshold; writes `~/.jmunch/gateway.toml` plus `~/.jmunch/env`
+  (mode `0600`); optionally calls `install` to register the service.
+  The upstream dialog has a **Test** button that probes the upstream's
+  `/v1/models` endpoint with the supplied API key — uses OpenAI's
+  `Authorization: Bearer` or Anthropic's `x-api-key` header per the
+  configured kind, works with local servers (Ollama / LM Studio / vLLM)
+  without a key. Add / Edit / Remove buttons manage upstreams in the
+  main wizard. Textual ships as a new optional extra `[setup]` (`pipx
+  install 'jmunch-mcp[gateway,setup]'` or `pipx inject jmunch-mcp
+  textual`). When the extra is absent, the wizard prints a friendly
+  install hint and exits — the non-interactive `init` / `install` path
+  still works.
+- **`gateway add-upstream` (interactive Textual modal) and
+  `gateway remove-upstream --name <n>` (non-interactive)** — manage
+  upstreams without re-running `setup`. `remove-upstream` auto-updates
+  `default_upstream` if you remove the current one, and refuses to leave
+  the gateway with zero upstreams.
+- **`~/.jmunch/env` — KEY=VALUE secrets file (mode `0600`).** Read by
+  `gateway install` and embedded into the rendered unit so the
+  launchd / systemd service actually sees the API keys. Hand-editable;
+  `setup` / `add-upstream` write to it for you. `install --env-file
+  <path>` overrides the location; the file is optional.
+- **`jmunch-mcp gateway init` / `install` — scaffold and run the gateway
+  as a background service.** `init` writes a commented starter
+  `~/.jmunch/gateway.toml`; `install` / `start` / `stop` / `restart` /
+  `status` / `uninstall` generate and manage a user-level service —
+  launchd on macOS, systemd user unit on Linux. `install` defaults
+  `--config` to `~/.jmunch/gateway.toml` and `--env-file` to
+  `~/.jmunch/env`. Runs the same interpreter that ran `install`; restarts
+  on failure; logs to `~/.jmunch/logs/`; `--label` allows multiple
+  instances. Unsupported platforms fall back to the foreground `gateway`
+  run with a clear message. The generated unit declares
+  `JMUNCH_DEBUG_DUMP=0` in the service environment; `install --debug-dump`
+  sets it to `1`.
+- `contrib/` — optional, clearly-fenced integration helpers that are not
+  part of the core package and not shipped in the wheel. `contrib/hermes-agent/`
+  ships a safe gateway update/restart script for Hermes-agent users.
 
 ## [0.2.1] — 2026-04-30
 
