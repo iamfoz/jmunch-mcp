@@ -204,6 +204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `contrib/` — optional, clearly-fenced integration helpers that are not
   part of the core package and not shipped in the wheel. `contrib/hermes-agent/`
   ships a safe gateway update/restart script for Hermes-agent users.
+### Changed
+- README restructured around the two run modes — **MCP proxy** (for MCP
+  clients) vs **Gateway** (for any OpenAI/Anthropic-API app) — so users
+  wiring up an HTTP-API app don't set up the MCP proxy by mistake. Adds an
+  **Integrations (`contrib/`)** section, including notes for Hermes-agent
+  users.
 
 ## [0.2.1] — 2026-04-30
 
