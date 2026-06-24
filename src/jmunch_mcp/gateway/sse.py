@@ -58,8 +58,10 @@ def assemble_response_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any
     response. We reconstruct `choices[i].message` from the `delta` updates.
 
     Enough fidelity for the verb-short-circuit decision + for re-emitting
-    back as a single SSE chunk. Not a perfect round-trip — usage stats and
-    the exact chunk boundaries are lost, which is fine for our purpose.
+    back as SSE. Chunk boundaries are lost, but `usage` is preserved from
+    whichever chunk carries it (per OpenAI's spec, that's a trailing chunk
+    with `choices: []`; some upstreams attach it inline on the final
+    content chunk instead) so downstream clients can do token accounting.
     """
     if not chunks:
         return {"choices": [], "id": "", "object": "chat.completion"}
@@ -74,6 +76,14 @@ def assemble_response_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any
         "model": base.get("model"),
         "choices": [],
     }
+
+    # Preserve usage from any chunk that carries it. Last write wins so
+    # the trailing usage frame (the authoritative one) overrides any
+    # interim values some upstreams emit.
+    for chunk in chunks:
+        u = chunk.get("usage")
+        if u:
+            out["usage"] = u
 
     # Fold deltas per choice index.
     choices_by_idx: dict[int, dict[str, Any]] = {}
@@ -155,10 +165,28 @@ def encode_as_sse(response: dict[str, Any]) -> list[bytes]:
         "model": model,
         "choices": choices,
     }
-    lines = [
-        b"data: " + json.dumps(chunk, default=str).encode("utf-8") + b"\n\n",
-        b"data: [DONE]\n\n",
-    ]
+    lines = [b"data: " + json.dumps(chunk, default=str).encode("utf-8") + b"\n\n"]
+
+    # When the upstream reported usage, replay it as a separate trailing
+    # chunk with `choices: []` — that's OpenAI's spec shape for the
+    # final usage frame when `stream_options.include_usage=True`.
+    # Clients that didn't request usage will simply see an extra empty
+    # chunk; the OpenAI/LangChain SDKs ignore it gracefully.
+    usage = response.get("usage")
+    if usage:
+        usage_chunk = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": response.get("created") or 0,
+            "model": model,
+            "choices": [],
+            "usage": usage,
+        }
+        lines.append(
+            b"data: " + json.dumps(usage_chunk, default=str).encode("utf-8") + b"\n\n"
+        )
+
+    lines.append(b"data: [DONE]\n\n")
     return lines
 
 
