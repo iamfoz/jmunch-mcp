@@ -89,6 +89,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, a leftover handle envelope in conversation history made the model
   narrate "a file or data payload has been attached" instead of treating
   it as compressed tool output.
+### Added
+- **Gateway: `JMUNCH_DEBUG_DUMP` upstream-request dump.** With the env
+  var set truthy (`1`/`true`/`yes`/`on`), every upstream call writes the
+  exact outbound request body — model, full messages array, system
+  field, tools, all untruncated (handle envelopes included) — as
+  pretty-printed JSON to a timestamped file under `~/.jmunch/debug/`.
+  Covers both the OpenAI and Anthropic routes, including verb-loop
+  iterations. Default off; no behaviour change when the var is unset.
 
 ## [0.2.1] — 2026-04-30
 
