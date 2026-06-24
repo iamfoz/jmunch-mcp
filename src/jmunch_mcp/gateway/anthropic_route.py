@@ -172,6 +172,28 @@ def _synthesize_tool_result_env(
     return json.dumps(env, default=str)
 
 
+# Drill-in guidance appended to the Anthropic top-level `system` field for
+# verb-loop follow-up calls. Mirrors openai_route._DRILL_IN_SYSTEM.
+_DRILL_IN_SYSTEM = (
+    "You are continuing a task. A large payload has been replaced with a handle; "
+    "use jmunch_peek / jmunch_slice / jmunch_search / jmunch_describe / "
+    "jmunch_summarize / jmunch_aggregate to drill in further, or answer the user "
+    "directly once you have enough information."
+)
+
+
+def _system_with_drill_in(system: Any) -> Any:
+    """Append the drill-in guidance to the Anthropic top-level `system` field.
+    Handles the None / string / content-block-list shapes."""
+    if not system:
+        return _DRILL_IN_SYSTEM
+    if isinstance(system, str):
+        return system + "\n\n" + _DRILL_IN_SYSTEM
+    if isinstance(system, list):
+        return [*system, {"type": "text", "text": _DRILL_IN_SYSTEM}]
+    return system
+
+
 async def _verb_loop(
     *,
     first_response: dict[str, Any],
@@ -180,6 +202,10 @@ async def _verb_loop(
     dispatcher: Dispatcher,
     tracker: SavingsTracker,
 ) -> dict[str, Any] | UpstreamError:
+    # The Anthropic loop already continues the real conversation (each round
+    # appends to working["messages"]); add the drill-in guidance to `system`
+    # so the model is reminded it is mid-task.
+    working["system"] = _system_with_drill_in(working.get("system"))
     response = first_response
     rounds = 0
     while True:

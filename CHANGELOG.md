@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Gateway verb loop: preserve `reasoning_content` for thinking-mode
+  upstreams.** DeepSeek V4 Pro, Kimi `/coding` / Moonshot thinking mode,
+  and Xiaomi MiMo thinking all require a non-empty `reasoning_content`
+  on every assistant turn replayed back. The synthesized assistant
+  message that the verb loop builds for each drill-in round dropped the
+  field, so the next round hit the upstream with HTTP 400
+  *"The reasoning_content in the thinking mode must be passed back to
+  the API."* The OpenAI route's `_verb_loop` now copies
+  `reasoning_content` from the upstream's response onto the synthesized
+  message, or pads with `" "` when absent (tolerated by validators that
+  require the field, harmless on those that ignore it; `""` is *not*
+  tolerated by DeepSeek V4 Pro). Anthropic's route already preserved
+  thinking blocks naturally — they ride along as content blocks (with
+  their `signature`) on the assistant message and are deep-copied.
+- **Gateway verb loop no longer destroys conversational context or
+  hides the app's tools.** The OpenAI route's `_verb_loop` rebuilt a
+  synthetic context from scratch (`_compact_base_messages` /
+  `_extract_user_and_handle`) — it discarded all conversation history
+  and kept only the *first* user message; deep in a conversation the
+  model was handed the opening turn as the entire request, lost the
+  thread, and greeted the user instead of answering. It also stripped
+  the request's `tools` array down to `jmunch_*` verbs only, so the
+  model wrongly concluded its real tools were gone mid-drill-in (cron
+  jobs reporting "I do not have access to a terminal/bash tool"). The
+  verb loop now continues the real (already handle-ified) conversation —
+  every user/assistant/tool turn, in order — with the drill-in guidance
+  merged into the system message, and forwards the FULL `tools` array
+  (app tools + jmunch verbs) to every iteration. The Anthropic route
+  already continued the real conversation; its verb loop now also merges
+  the drill-in guidance into the top-level `system` field. Supersedes
+  the earlier `fix/verb-loop-400-502`, `fix/preserve-user-role-in-verb-loop`,
+  and `fix/preserve-app-tools-in-verb-loop` band-aids.
+
 ## [0.2.1] — 2026-04-30
 
 ### Fixed
