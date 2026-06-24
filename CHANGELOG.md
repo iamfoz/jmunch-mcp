@@ -61,6 +61,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emits a separate trailing usage frame so the wire shape matches the
   OpenAI streaming spec. Clients that didn't request usage see an extra
   empty-choices chunk and ignore it gracefully.
+### Added
+- **Gateway: `X-Jmunch-Gateway` response header** on every response —
+  streaming and non-streaming, both routes, plus `/health`, `/v1/models`
+  and error responses. Lets a downstream consumer passively detect that
+  jmunch is in the LLM path; the value carries the gateway version.
+- **Gateway: `X-Jmunch-Handleify` request header.** `X-Jmunch-Handleify:
+  false` (or `0`/`no`) disables request-side handle-ification for that
+  one call, so a memory-extraction call sees full-fidelity tool content.
+  A per-request config override, parallel to `X-Jmunch-Inject`.
+
+### Changed
+- **Gateway: `inject_tools = "auto"` now keys off the handle envelope, not
+  the request's `tools` array.** `auto` injects the jmunch verbs (and the
+  handle-envelope system instruction) exactly when the forwarded request
+  carries a handle envelope — i.e. precisely when the model needs the
+  verbs to drill in. Previously `auto` guessed from whether the app
+  declared `tools`, which missed a large tool result on a request that
+  omitted the `tools` array, and needlessly injected the verbs on
+  tool-using turns that had nothing to drill into.
+
+### Fixed
+- **Gateway: model no longer mistakes a handle envelope for a
+  user-attached file.** A static system instruction explaining handle
+  envelopes is now injected into every forwarded request whenever verb
+  injection is active — not just during the internal verb loop. Without
+  it, a leftover handle envelope in conversation history made the model
+  narrate "a file or data payload has been attached" instead of treating
+  it as compressed tool output.
 
 ## [0.2.1] — 2026-04-30
 
