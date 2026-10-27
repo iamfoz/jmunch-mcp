@@ -103,6 +103,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prompt-cache-stable handle-ification, with content-addressed dedup.**
+  Apps re-send the whole conversation every turn, and an LLM provider's
+  prompt cache only hits while every earlier message is byte-identical, so
+  the same tool_result must always handle-ify to exactly the same text.
+  The gateway now hashes each payload (SHA-256): identical payloads reuse
+  one handle and backend, and the handle ID is derived from the hash
+  (`h_<24 hex>`), so it matches across gateway restarts too. Handle
+  envelopes in history leave out the per-call `total_tokens_saved`,
+  `total_cost_avoided` and `timing_ms` (`envelope(stable=True)`, which
+  also keeps the self-measured `tokens_saved` stable); savings are still
+  recorded in the tracker and dashboard. Previously every handle-ified
+  result changed on every turn, so the cache missed from the first one
+  onward. Ports `feat/content-addressed-handles` onto the context-aware
+  envelope so it merges into `deploy`.
 - **Context-aware handle-ification.** The gateway now gates request-side
   compression on request size *relative to the model's context window*.
   New `[interception]` keys:
