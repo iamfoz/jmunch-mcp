@@ -4,7 +4,17 @@ Default (no subcommand): run the proxy.
     jmunch-mcp --config path/to/config.toml [--report]
 
 Subcommands:
-    jmunch-mcp init  [...]   Scan + generate wrapper configs for upstreams.
+    jmunch-mcp init  [...]            Scan + generate wrapper configs.
+    jmunch-mcp dashboard [...]        Local metrics web UI.
+    jmunch-mcp gateway --config ...   Run the HTTP gateway (foreground).
+    jmunch-mcp gateway setup          Interactive first-time setup wizard.
+    jmunch-mcp gateway init           Write a starter ~/.jmunch/gateway.toml.
+    jmunch-mcp gateway add-upstream   Add an upstream (interactive).
+    jmunch-mcp gateway remove-upstream --name <n>   Remove an upstream.
+    jmunch-mcp gateway install|start|stop|restart|status|uninstall
+                                      Manage the gateway as a background
+                                      service (launchd on macOS, systemd
+                                      user unit on Linux).
 """
 from __future__ import annotations
 
@@ -43,6 +53,12 @@ def _run_serve(args: argparse.Namespace) -> int:
 
 
 def _run_gateway(argv: list[str]) -> int:
+    from .cli.service import GATEWAY_VERBS
+
+    if argv and argv[0] in GATEWAY_VERBS:
+        from .cli.service import main as service_main
+        return service_main(argv[0], argv[1:])
+
     parser = argparse.ArgumentParser(prog="jmunch-mcp gateway")
     parser.add_argument("--config", required=True, help="Path to gateway.toml")
     parser.add_argument("--log-level", default=None, help="Override config log_level")
@@ -53,12 +69,33 @@ def _run_gateway(argv: list[str]) -> int:
 
     config = load_gateway(args.config)
     level = args.log_level or config.log_level
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        stream=sys.stderr,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    _setup_gateway_logging(level)
     return serve(config)
+
+
+def _setup_gateway_logging(level: str) -> None:
+    """Split-stream logging for the gateway:
+      - DEBUG / INFO  → stdout (→ ~/.jmunch/logs/gateway.out.log)
+      - WARNING+      → stderr (→ ~/.jmunch/logs/gateway.err.log)
+    A non-empty .err.log therefore always means a real problem. (Python's
+    default `basicConfig(stream=sys.stderr)` lumps everything into stderr,
+    which makes the .err.log mostly routine activity — the opposite of
+    useful.)"""
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    out_h = logging.StreamHandler(sys.stdout)
+    out_h.setFormatter(fmt)
+    out_h.addFilter(lambda record: record.levelno < logging.WARNING)
+
+    err_h = logging.StreamHandler(sys.stderr)
+    err_h.setFormatter(fmt)
+    err_h.setLevel(logging.WARNING)
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(out_h)
+    root.addHandler(err_h)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
 
 def main() -> int:
