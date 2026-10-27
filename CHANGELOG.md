@@ -207,6 +207,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result changed on every turn, so the cache missed from the first one
   onward. Ports `feat/content-addressed-handles` onto the context-aware
   envelope so it merges into `deploy`.
+- **`recency_batch` for prompt-cache-friendly compression.** With a plain
+  `recency_window`, one more tool_result leaves the window and is
+  compressed on almost every turn, which rewrites earlier history every
+  turn and makes the upstream's prompt cache miss. `recency_batch = N`
+  lets results leave the window N at a time, so history changes once per
+  N tool calls. Default `1` keeps the previous behaviour; the example
+  config uses `10`.
 - **Context-aware handle-ification.** The gateway now gates request-side
   compression on request size *relative to the model's context window*.
   New `[interception]` keys:

@@ -51,6 +51,12 @@ context_fraction = 0.5
 # Older tool_results in the history are still compressed. 0 disables it.
 recency_window = 4
 
+# Recency batch. Let tool_results leave the recency window this many at a
+# time. With 1, one more result is compressed on almost every turn, which
+# rewrites earlier history every turn and defeats the upstream's prompt
+# cache; with 10, history changes once per 10 tool calls. 1 is the default.
+recency_batch = 10
+
 # Context window (tokens) assumed for models not in the built-in table.
 default_context_window = 128000
 

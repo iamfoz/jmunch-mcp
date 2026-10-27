@@ -50,6 +50,10 @@ class Interception:
     # They are the agent's active working set; compressing them mid-task is
     # the most direct cause of "forgets what it was doing". 0 disables it.
     recency_window: int = 0
+    # Let results leave the recency window this many at a time, so history
+    # (and the upstream's prompt cache) changes once per batch rather than
+    # on every turn. 1 (default) moves the window one result per turn.
+    recency_batch: int = 1
     # Context window (tokens) assumed for models not in the built-in table
     # or `context_windows` map.
     default_context_window: int = 128_000
@@ -146,6 +150,7 @@ def load(path: str | os.PathLike) -> GatewayConfig:
         inject_tools=str(inter_raw.get("inject_tools", "auto")),
         context_fraction=float(inter_raw.get("context_fraction", 0.0)),
         recency_window=int(inter_raw.get("recency_window", 0)),
+        recency_batch=int(inter_raw.get("recency_batch", 1)),
         default_context_window=int(inter_raw.get("default_context_window", 128_000)),
         context_windows={str(k): int(v) for k, v in context_windows_raw.items()},
     )
@@ -155,6 +160,8 @@ def load(path: str | os.PathLike) -> GatewayConfig:
         raise ValueError(f"{p}: interception.context_fraction must be between 0.0 and 1.0")
     if interception.recency_window < 0:
         raise ValueError(f"{p}: interception.recency_window must be >= 0")
+    if interception.recency_batch < 1:
+        raise ValueError(f"{p}: interception.recency_batch must be >= 1")
     if interception.default_context_window <= 0:
         raise ValueError(f"{p}: interception.default_context_window must be > 0")
 
