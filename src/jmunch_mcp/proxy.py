@@ -347,16 +347,14 @@ class Proxy:
                 "jmunch_list_handles lists all live handles."
             ),
         }
+        # response_bytes omitted → the envelope self-measures and records the
+        # true savings (passing 0 would over-credit the tracker by raw_bytes).
         env = envelope(
             result=handle_result,
             raw_bytes=raw_bytes,
-            response_bytes=0,
             tracker=self.tracker,
             timing_ms=timer_ms(started),
         )
-        env_text = json.dumps(env, default=str)
-        env["_meta"]["response_tokens"] = len(env_text) // 4
-        env["_meta"]["tokens_saved"] = max(0, (raw_bytes - len(env_text)) // 4)
         env_text = json.dumps(env, default=str)
 
         out = copy.deepcopy(msg)

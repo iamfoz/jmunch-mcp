@@ -13,11 +13,14 @@ the proxy wraps it in the jMRI envelope before emitting.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .errors import HANDLE_EXPIRED, INVALID_ARGS, NOT_APPLICABLE, make_error
 from .registry import HandleRegistry
 from .stats import SessionStats
+
+log = logging.getLogger("jmunch.verbs")
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -119,7 +122,14 @@ class Dispatcher:
         handler = _HANDLERS.get(name)
         if handler is None:
             return make_error(INVALID_ARGS, f"Unknown jmunch tool '{name}'.")
-        return handler(self, args)
+        try:
+            return handler(self, args)
+        except Exception as e:
+            # Malformed model-supplied args (e.g. n=null → int(None)) must
+            # surface as a structured error, never an unhandled exception —
+            # the latter would kill the proxy's pump loop or 500 the gateway.
+            log.warning("jmunch verb '%s' raised %s: %s", name, type(e).__name__, e)
+            return make_error(INVALID_ARGS, f"verb '{name}' failed: {e}")
 
     # --- handlers ---
 
