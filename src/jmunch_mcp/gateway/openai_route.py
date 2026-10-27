@@ -161,9 +161,10 @@ async def _first_turn_streaming(upstream: Upstream, working: dict[str, Any]) -> 
     return assemble_response_from_chunks(events)
 
 
-# Terse system prompt used for verb-loop iterations only. The model already
-# saw the app's full system prompt in the first upstream call; we don't need
-# to re-ship it on every drill-in round.
+# Drill-in guidance merged into the system message for verb-loop follow-up
+# calls — reminds the model it is mid-task and may answer once it has enough
+# information. Merged into the real conversation's system message; the
+# conversation itself is preserved (see _verb_loop_base_messages).
 _DRILL_IN_SYSTEM = (
     "You are continuing a task. A large payload has been replaced with a handle; "
     "use jmunch_peek / jmunch_slice / jmunch_search / jmunch_describe / "
@@ -178,86 +179,28 @@ def _brief(text: str, cap: int = 280) -> str:
     return t if len(t) <= cap else t[:cap - 1] + "…"
 
 
-def _jmunch_only_tools(tools: Any) -> list[Any]:
-    """Keep only the jmunch verb tool definitions. In drill-in iterations the
-    non-jmunch tools (e.g. the app's original MCP tools) are dead weight —
-    the model already made its tool_call to them in the first round."""
-    if not isinstance(tools, list):
-        return tools
-    out: list[Any] = []
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function") or {}
-        name = fn.get("name")
-        if isinstance(name, str) and is_jmunch_gateway_tool(name):
-            out.append(t)
-    return out
+def _verb_loop_base_messages(messages: list[Any]) -> list[Any]:
+    """Base message list for verb-loop follow-up calls: the real, already
+    handle-ified conversation — every user / assistant / tool turn, in
+    original order — with the drill-in guidance merged into the leading
+    system message (or a fresh system message prepended if there is none).
 
+    Continuing the actual conversation, rather than a synthetic
+    reconstruction, keeps the model's context intact — it still knows what
+    the user most recently asked. It costs no more than the turn's initial
+    upstream call: fat tool payloads are already compact handle envelopes,
+    so the conversation is already small.
 
-def _compact_envelope_content(content: str) -> str:
-    """If `content` is a jMRI envelope for a handle-ified tool_result, strip
-    the heavyweight `_meta` block down to just what the model needs (the
-    handle id + summary hint). Saves ~500 bytes per drill-in iteration."""
-    try:
-        env = json.loads(content)
-    except (json.JSONDecodeError, ValueError):
-        return content
-    if not isinstance(env, dict):
-        return content
-    result = env.get("result")
-    if not (isinstance(result, dict) and isinstance(result.get("handle"), str)):
-        return content  # not a handle envelope
-    compact = {"handle": result["handle"], "kind": result.get("kind")}
-    if "summary" in result:
-        compact["summary"] = result["summary"]
-    if "_hint" in result:
-        compact["_hint"] = result["_hint"]
-    return json.dumps(compact)
-
-
-def _extract_user_and_handle(base: list[Any]) -> tuple[str | None, str | None]:
-    """Scan base messages for the user's original question and a handle
-    envelope tool_result. Returns (user_text, handle_envelope_text)."""
-    user_text: str | None = None
-    handle_env: str | None = None
-    for m in base:
-        if not isinstance(m, dict):
-            continue
-        if m.get("role") == "user" and user_text is None:
-            c = m.get("content")
-            if isinstance(c, str):
-                user_text = c
-        if m.get("role") == "tool" and isinstance(m.get("content"), str):
-            # Keep the most recent handle envelope we find.
-            try:
-                env = json.loads(m["content"])
-                if (isinstance(env, dict)
-                    and isinstance(env.get("result"), dict)
-                    and isinstance(env["result"].get("handle"), str)):
-                    handle_env = _compact_envelope_content(m["content"])
-            except (json.JSONDecodeError, ValueError):
-                pass
-    return user_text, handle_env
-
-
-def _compact_base_messages(base: list[Any]) -> list[Any]:
-    """Prepare `base_messages` for drill-in iterations.
-
-    Aggressive compaction: drop the app's original system prompt, drop the
-    app's original tool_call chain, and fold everything the model needs
-    into a single system message (drill-in instructions + user question +
-    handle info). The result is a minimal `[system]` base; callers append
-    `[system_prior_verbs?, assistant(latest_verb), tool(latest_result)]`
-    on top of it for each drill-in turn.
+    Returns a new list with a new leading system dict; the caller's
+    `messages` and its dicts are never mutated.
     """
-    user_text, handle_env = _extract_user_and_handle(base)
-    parts = [_DRILL_IN_SYSTEM]
-    if user_text:
-        parts.append(f"The user's request was:\n{user_text}")
-    if handle_env:
-        parts.append(f"A large payload has been registered as a handle:\n{handle_env}")
-    return [{"role": "system", "content": "\n\n".join(parts)}]
+    out: list[Any] = [m for m in messages if isinstance(m, dict)]
+    if out and out[0].get("role") == "system" and isinstance(out[0].get("content"), str):
+        head = dict(out[0])
+        head["content"] = head["content"] + "\n\n" + _DRILL_IN_SYSTEM
+        out[0] = head
+        return out
+    return [{"role": "system", "content": _DRILL_IN_SYSTEM}, *out]
 
 
 def _prior_verbs_note(trail: list[dict[str, Any]]) -> str:
@@ -296,17 +239,22 @@ async def _verb_loop(
     tracker: SavingsTracker,
 ) -> dict[str, Any] | UpstreamError:
     """Given the first upstream response, repeatedly resolve jmunch verb
-    tool_calls locally. Each follow-up upstream call carries a **compact**
-    message list: the original system/user/assistant-tool-call/tool-result
-    chain that the app submitted, plus a running "prior verbs" system note
-    (short summaries) and the single most-recent verb call + full result.
+    tool_calls locally. Each follow-up upstream call carries the real
+    (already handle-ified) conversation — preserving full context — plus a
+    running "prior verbs" note (short summaries of earlier drill-ins) and
+    the single most-recent verb call + full result.
 
-    This keeps per-iteration payload roughly flat instead of growing
-    O(rounds) — the key to jmunch actually saving tokens when the model
-    needs multiple drill-ins to answer.
+    Only the prior-verbs note and the latest verb pair grow across rounds;
+    the conversation base is fixed-size, so per-iteration payload stays
+    roughly flat.
     """
-    base_messages = _compact_base_messages(list(working.get("messages") or []))
-    base_tools = _jmunch_only_tools(working.get("tools"))
+    base_messages = _verb_loop_base_messages(list(working.get("messages") or []))
+    # Preserve the FULL tools array (app tools + jmunch verbs) across drill-in
+    # iterations. Stripping to jmunch-only saved a few KB per iteration but
+    # caused the model to wrongly conclude its real tools were unavailable
+    # (e.g. cron jobs reporting "I do not have access to a terminal/bash tool"
+    # because the only tools visible during peek/slice rounds were jmunch_*).
+    base_tools = working.get("tools")
     verb_trail: list[dict[str, Any]] = []  # past verbs: {name, args_brief, result_brief}
     response = first_response
     rounds = 0
@@ -350,14 +298,28 @@ async def _verb_loop(
         # latest verb call + its full result.
         compact_messages: list[Any] = list(base_messages)
         if verb_trail:
-            compact_messages.append({
-                "role": "system",
-                "content": _prior_verbs_note(verb_trail),
-            })
+            # Merge the prior-verbs summary into the leading system message —
+            # on a fresh copy, never mutating base_messages (reused every
+            # round). Keeps the system message first, as upstream providers
+            # require.
+            sys0 = dict(compact_messages[0])
+            sys0["content"] = (sys0.get("content") or "") + "\n\n" + _prior_verbs_note(verb_trail)
+            compact_messages[0] = sys0
         compact_messages.append({
             "role": "assistant",
             "content": message.get("content"),
             "tool_calls": [last_call],
+            # DeepSeek V4 / Kimi / MiMo thinking-mode upstreams require a
+            # non-empty `reasoning_content` on every assistant turn.
+            # Preserve what the upstream sent; pad with " " when absent —
+            # tolerated by validators that require the field, harmless on
+            # those that ignore it. "" is also rejected by DeepSeek V4 Pro.
+            "reasoning_content": (
+                message["reasoning_content"]
+                if isinstance(message.get("reasoning_content"), str)
+                and message["reasoning_content"]
+                else " "
+            ),
         })
         compact_messages.append({
             "role": "tool",
