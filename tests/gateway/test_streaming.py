@@ -149,6 +149,108 @@ def test_encode_as_sse_roundtrip():
     assert recovered["choices"][0]["message"]["content"] == "ok"
 
 
+def test_assemble_preserves_trailing_usage_chunk():
+    """OpenAI spec: when stream_options.include_usage=True the upstream
+    emits a final chunk with choices=[] and a populated usage block."""
+    chunks = [
+        {"id": "1", "model": "m", "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ]},
+        {"id": "1", "model": "m", "choices": [], "usage": {
+            "prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49,
+        }},
+    ]
+    out = assemble_response_from_chunks(chunks)
+    assert out["choices"][0]["message"]["content"] == "hi"
+    assert out["usage"] == {
+        "prompt_tokens": 42, "completion_tokens": 7, "total_tokens": 49,
+    }
+
+
+def test_assemble_preserves_inline_usage():
+    """Some upstreams (non-spec-compliant but common) attach usage to the
+    final content-bearing chunk instead of a separate trailing chunk."""
+    chunks = [
+        {"id": "1", "model": "m", "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}
+        ], "usage": {
+            "prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13,
+        }},
+    ]
+    out = assemble_response_from_chunks(chunks)
+    assert out["usage"]["total_tokens"] == 13
+
+
+def test_assemble_usage_last_write_wins():
+    """If multiple chunks carry usage, the latest one wins (the trailing
+    spec-compliant frame should always be authoritative over any interim
+    estimates a proxy might inject)."""
+    chunks = [
+        {"id": "1", "model": "m", "choices": [
+            {"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}
+        ], "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
+        {"id": "1", "model": "m", "choices": [], "usage": {
+            "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150,
+        }},
+    ]
+    out = assemble_response_from_chunks(chunks)
+    assert out["usage"]["total_tokens"] == 150
+
+
+def test_assemble_no_usage_when_absent():
+    """When no chunk carries usage, the assembled response must not
+    invent one — downstream clients rely on absence as a signal."""
+    chunks = [
+        {"id": "1", "model": "m", "choices": [
+            {"index": 0, "delta": {"content": "hi"}, "finish_reason": "stop"}
+        ]},
+    ]
+    out = assemble_response_from_chunks(chunks)
+    assert "usage" not in out
+
+
+def test_encode_emits_trailing_usage_chunk():
+    """A response with usage must round-trip through encode→parse→assemble
+    with its usage intact, matching the OpenAI streaming spec shape
+    (separate trailing chunk with empty choices)."""
+    resp = {
+        "id": "c1", "model": "m", "created": 123,
+        "choices": [{"index": 0, "finish_reason": "stop",
+                     "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+    }
+    chunks = encode_as_sse(resp)
+    assert chunks[-1] == b"data: [DONE]\n\n"
+    # Three frames now: content chunk, usage chunk, [DONE].
+    assert len(chunks) == 3
+    # The usage chunk must follow the OpenAI spec shape: empty choices,
+    # populated usage.
+    usage_payload = json.loads(chunks[1].removeprefix(b"data: ").rstrip(b"\n\n"))
+    assert usage_payload["choices"] == []
+    assert usage_payload["usage"]["total_tokens"] == 6
+
+    async def src():
+        for c in chunks:
+            yield c
+    events = asyncio.run(parse_sse_stream(src()))
+    recovered = assemble_response_from_chunks(events)
+    assert recovered["choices"][0]["message"]["content"] == "ok"
+    assert recovered["usage"]["total_tokens"] == 6
+
+
+def test_encode_omits_usage_chunk_when_absent():
+    """No usage in → no extra chunk out. Keeps the wire skinny for
+    clients that didn't enable stream_options.include_usage."""
+    resp = {
+        "id": "c1", "model": "m", "created": 123,
+        "choices": [{"index": 0, "finish_reason": "stop",
+                     "message": {"role": "assistant", "content": "ok"}}],
+    }
+    chunks = encode_as_sse(resp)
+    assert len(chunks) == 2  # content + [DONE], no usage frame
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
 # ---------------------------------------------------------------------------
 # Streaming end-to-end: verb short-circuit under stream=true
 # ---------------------------------------------------------------------------
