@@ -53,12 +53,21 @@ def request_is_eligible(
     return request_tokens >= interception.context_fraction * window
 
 
-def recency_protected_count(total: int, recency_window: int) -> int:
+def recency_protected_count(total: int, recency_window: int, recency_batch: int = 1) -> int:
     """How many of `total` ordered tool_results sit inside the recency
-    window and must be left verbatim. Clamped to `[0, total]`."""
-    if recency_window <= 0 or total <= 0:
+    window and must be left verbatim. Clamped to `[0, total]`.
+
+    With `recency_batch` > 1, results leave the window `recency_batch` at a
+    time instead of one per turn. Apps re-send the whole conversation every
+    turn and an LLM provider's prompt cache only hits while every earlier
+    message is unchanged, so compressing one more result per turn rewrites
+    history on every turn; batching means it changes once per batch."""
+    if total <= 0:
         return 0
-    return min(recency_window, total)
+    window = max(0, recency_window)
+    batch = max(1, recency_batch)
+    compressible = ((total - window) // batch) * batch if total > window else 0
+    return total - compressible
 
 
 def maybe_handleify(

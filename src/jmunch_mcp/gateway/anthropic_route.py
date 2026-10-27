@@ -105,7 +105,8 @@ def _handleify_request_messages(
             for bi, b in enumerate(m["content"]):
                 if isinstance(b, dict) and b.get("type") == "tool_result":
                     tr_coords.append((mi, bi))
-    n_protected = recency_protected_count(len(tr_coords), interception.recency_window)
+    n_protected = recency_protected_count(
+        len(tr_coords), interception.recency_window, interception.recency_batch)
     protected: set[tuple[int, int]] = (
         set(tr_coords[len(tr_coords) - n_protected:]) if n_protected else set()
     )

@@ -78,7 +78,8 @@ def _handleify_request_messages(
     # Recency window: protect the last N `role: "tool"` messages.
     tool_idxs = [i for i, m in enumerate(messages)
                  if isinstance(m, dict) and m.get("role") == "tool"]
-    n_protected = recency_protected_count(len(tool_idxs), interception.recency_window)
+    n_protected = recency_protected_count(
+        len(tool_idxs), interception.recency_window, interception.recency_batch)
     protected: set[int] = set(tool_idxs[len(tool_idxs) - n_protected:]) if n_protected else set()
 
     new_messages: list[Any] = []

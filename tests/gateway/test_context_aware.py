@@ -349,3 +349,54 @@ def test_config_rejects_negative_recency_window(tmp_path):
     cfg = _write_cfg(tmp_path, "[interception]\nrecency_window = -1\n")
     with pytest.raises(ValueError, match="recency_window"):
         load_gateway(cfg)
+
+
+# ---------------------------------------------------------------------------
+# recency_batch: results leave the recency window in batches
+# ---------------------------------------------------------------------------
+
+def test_recency_batch_of_one_matches_the_plain_window():
+    for total in range(0, 30):
+        for window in (0, 2, 4):
+            assert recency_protected_count(total, window, 1) == recency_protected_count(total, window)
+
+
+def test_recency_batch_releases_results_in_blocks():
+    # window 4, batch 5: nothing compressible until 9 results, then 5 at a time
+    protected = [recency_protected_count(total, 4, 5) for total in range(0, 21)]
+    compressible = [total - p for total, p in zip(range(0, 21), protected)]
+    assert compressible == [0] * 9 + [5] * 5 + [10] * 5 + [15] * 2
+    assert all(p >= min(4, total) for total, p in zip(range(0, 21), protected))
+
+
+@pytest.mark.parametrize("batch, max_changes", [(1, 40), (10, 4)])
+def test_recency_batch_changes_history_less_often(tmp_path, batch, max_changes):
+    """As a conversation grows one tool_result per turn, count the turns on
+    which an earlier message flips from verbatim to a handle. Each flip
+    rewrites history and costs a prompt-cache miss upstream."""
+    inter = Interception(threshold_tokens=100, context_fraction=0.0,
+                         recency_window=4, recency_batch=batch)
+    previously_compressed: set[int] = set()
+    changes = 0
+    for results in range(5, 45):
+        req = _openai_req("gpt-4", [_fat() for _ in range(results)])
+        out, _, _ = openai_handleify(
+            req, registry=HandleRegistry(), tracker=_tracker(tmp_path),
+            interception=inter, request_bytes=len(json.dumps(req)),
+        )
+        tool_msgs = [m for m in out["messages"] if m["role"] == "tool"]
+        compressed = {i for i, m in enumerate(tool_msgs) if _is_handle_envelope(m["content"])}
+        assert previously_compressed <= compressed  # never un-compressed
+        changes += compressed != previously_compressed
+        previously_compressed = compressed
+    assert changes <= max_changes
+    if batch == 1:
+        assert changes >= 35  # one more result compressed on nearly every turn
+
+
+def test_config_loads_and_validates_recency_batch(tmp_path):
+    cfg = _write_cfg(tmp_path, "[interception]\nrecency_batch = 10\n")
+    assert load_gateway(cfg).interception.recency_batch == 10
+    bad = _write_cfg(tmp_path, "[interception]\nrecency_batch = 0\n")
+    with pytest.raises(ValueError, match="recency_batch"):
+        load_gateway(bad)
