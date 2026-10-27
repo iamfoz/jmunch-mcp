@@ -10,16 +10,16 @@ slice of logic is small and the two call sites have slightly different shapes.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-import time
 from typing import Any
 
 from ..backends.jsontree import JSONBackend
 from ..backends.tabular import TabularBackend
 from ..backends.text import TextBackend
-from ..meta import BYTES_PER_TOKEN, SavingsTracker, envelope, timer_ms
-from ..registry import HandleRegistry
+from ..meta import BYTES_PER_TOKEN, SavingsTracker, envelope
+from ..registry import Handle, HandleRegistry
 from ..sniffer import Kind, classify, extract_rows
 from .config import Interception
 from .context_window import window_for
@@ -79,6 +79,14 @@ def maybe_handleify(
     if len(text) < threshold_bytes:
         return None
 
+    # Content-addressed dedup: identical payloads share one handle (and one
+    # backend), and the handle ID is derived from the hash, so the same
+    # payload always gets the same ID, across processes and restarts too.
+    digest = _content_hash(text)
+    existing = registry.find_by_hash(digest)
+    if existing is not None:
+        return _handle_envelope(existing, raw_bytes=len(text), tracker=tracker), existing.id
+
     try:
         payload: Any = json.loads(text)
         kind = classify(payload)
@@ -86,7 +94,6 @@ def maybe_handleify(
         payload = text
         kind = Kind.TEXT
 
-    started = time.perf_counter_ns()
     backend: Any
     summary_detail: dict[str, Any] = {}
 
@@ -122,13 +129,33 @@ def maybe_handleify(
     else:
         return None
 
-    handle = registry.register(backend, backend.size_bytes, backend.kind, source=source)
+    handle = registry.register(
+        backend, backend.size_bytes, backend.kind, source=source, content_hash=digest,
+    )
+    env_text = _handle_envelope(handle, raw_bytes=len(text), tracker=tracker)
+    log.info(
+        "gateway handle-ified %s payload: raw=%d detail=%s handle=%s",
+        backend.kind, len(text), summary_detail, handle.id,
+    )
+    return env_text, handle.id
 
-    raw_bytes = len(text)
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _handle_envelope(handle: Handle, *, raw_bytes: int, tracker: SavingsTracker) -> str:
+    """The envelope that replaces a tool_result in conversation history.
+
+    Apps re-send the whole conversation every turn, so this must be
+    byte-identical for the same payload: a content-derived handle ID and a
+    `stable` envelope (no running totals or timing). Otherwise the upstream's
+    prompt cache misses from the first handle-ified message onward, every turn.
+    """
     handle_result = {
         "handle": handle.id,
         "kind": handle.kind,
-        "summary": backend.summary(),
+        "summary": handle.backend.summary(),
         "_hint": (
             "This payload was large and has been replaced with a handle. "
             "Use the jmunch_peek, jmunch_slice, jmunch_search, or jmunch_describe "
@@ -137,16 +164,5 @@ def maybe_handleify(
     }
     # response_bytes omitted → the envelope self-measures and records the
     # true savings (passing 0 would over-credit the tracker by raw_bytes).
-    env = envelope(
-        result=handle_result,
-        raw_bytes=raw_bytes,
-        tracker=tracker,
-        timing_ms=timer_ms(started),
-    )
-    env_text = json.dumps(env, default=str)
-
-    log.info(
-        "gateway handle-ified %s payload: raw=%d detail=%s handle=%s saved~%d tokens",
-        backend.kind, raw_bytes, summary_detail, handle.id, env["_meta"]["tokens_saved"],
-    )
-    return env_text, handle.id
+    env = envelope(result=handle_result, raw_bytes=raw_bytes, tracker=tracker, stable=True)
+    return json.dumps(env, default=str)

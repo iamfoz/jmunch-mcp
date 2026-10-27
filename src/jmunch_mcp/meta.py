@@ -166,6 +166,7 @@ def _meta_block(
     total_saved: int,
     total_cost: dict[str, float],
     timing_ms: float | None,
+    stable: bool = False,
 ) -> dict[str, Any]:
     meta: dict[str, Any] = {
         "tokens_saved": tokens_saved,
@@ -181,6 +182,9 @@ def _meta_block(
     }
     if timing_ms is not None:
         meta["timing_ms"] = round(timing_ms, 2)
+    if stable:
+        for key in ("total_tokens_saved", "total_cost_avoided", "timing_ms"):
+            meta.pop(key, None)
     return meta
 
 
@@ -201,6 +205,7 @@ def envelope(
     response_bytes: int | None = None,
     tracker: SavingsTracker,
     timing_ms: float | None = None,
+    stable: bool = False,
 ) -> dict[str, Any]:
     """Wrap a result or error in the jMRI response envelope.
 
@@ -213,6 +218,14 @@ def envelope(
     that case the envelope measures its own serialized length and records the
     true savings to the tracker exactly once — passing `response_bytes=0`
     here would credit the tracker with `raw_bytes` of savings it never made.
+
+    `stable=True` leaves out everything that changes between calls (the running
+    totals and timing), so the same input always yields the same envelope; it
+    also applies to the self-measuring draft, so the measured size and
+    `tokens_saved` are stable too. Envelopes placed in conversation history
+    need this: an LLM provider's prompt cache only hits while every earlier
+    message is byte-identical to the previous request. Savings are still
+    recorded in the tracker.
     """
     if response_bytes is None:
         # Draft with worst-case (response_bytes=0) numbers to size the
@@ -224,6 +237,7 @@ def envelope(
             total_saved=tracker.total,
             total_cost={k: 0.0 for k in _MODEL_PRICES_PER_1M},
             timing_ms=timing_ms,
+            stable=stable,
         ))
         measured = len(json.dumps(draft, default=str))
         tokens_saved = estimate_savings(raw_bytes, measured)
@@ -235,6 +249,7 @@ def envelope(
             total_saved=total_saved,
             total_cost=total_cost,
             timing_ms=timing_ms,
+            stable=stable,
         ))
 
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
@@ -246,6 +261,7 @@ def envelope(
         total_saved=total_saved,
         total_cost=total_cost,
         timing_ms=timing_ms,
+        stable=stable,
     ))
 
 
